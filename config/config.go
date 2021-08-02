@@ -192,6 +192,14 @@ var (
 	DefaultExemplarsConfig = ExemplarsConfig{
 		MaxExemplars: 100000,
 	}
+
+	DefaultTSDBConfig = TSDBConfig{
+		Retention: &TSDBRetentionConfig{
+			Time:                   model.Duration(360 * time.Hour),
+			Size:                   units.Base2Bytes(0),
+			AllowOverlappingBlocks: false,
+		},
+	}
 )
 
 // Config is the top-level configuration for Prometheus's config files.
@@ -477,6 +485,7 @@ func (c *ScrapeConfig) MarshalYAML() (interface{}, error) {
 // StorageConfig configures runtime reloadable configuration options.
 type StorageConfig struct {
 	ExemplarsConfig *ExemplarsConfig `yaml:"exemplars,omitempty"`
+	TSDB            *TSDBConfig      `yaml:"tsdb,omitempty"`
 }
 
 // ExemplarsConfig configures runtime reloadable configuration options.
@@ -484,6 +493,16 @@ type ExemplarsConfig struct {
 	// MaxExemplars sets the size, in # of exemplars stored, of the single circular buffer used to store exemplars in memory.
 	// Use a value of 0 or less than 0 to disable the storage without having to restart Prometheus.
 	MaxExemplars int64 `yaml:"max_exemplars,omitempty"`
+}
+
+type TSDBConfig struct {
+	Retention *TSDBRetentionConfig `yaml:"retention,omitempty"`
+}
+
+type TSDBRetentionConfig struct {
+	Time                   model.Duration   `yaml:"time,omitempty"`
+	Size                   units.Base2Bytes `yaml:"size,omitempty"`
+	AllowOverlappingBlocks bool             `yaml:"allow_overlapping_blocks,omitempty"`
 }
 
 // AlertingConfig configures alerting and alertmanager related configs.
