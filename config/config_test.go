@@ -1371,3 +1371,19 @@ func kubernetesSDHostURL() config.URL {
 	tURL, _ := url.Parse("https://localhost:1234")
 	return config.URL{URL: tURL}
 }
+
+func TestStorageTSDBConfigs(t *testing.T) {
+	c, err := LoadFile("testdata/storage_tsdb.good.yml", false, log.NewNopLogger())
+	require.NoError(t, err)
+	exp := DefaultConfig
+	exp.StorageConfig = StorageConfig{
+		TSDB: &TSDBConfig{
+			Retention: &TSDBRetentionConfig{
+				Time:                   model.Duration(24 * time.Hour),
+				Size:                   units.Base2Bytes(5 * units.Gibibyte),
+				AllowOverlappingBlocks: true,
+			},
+		},
+	}
+	require.Equal(t, exp, *c)
+}

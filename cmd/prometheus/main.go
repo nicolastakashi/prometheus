@@ -385,6 +385,16 @@ func main() {
 			cfg.tsdb.RetentionDuration = newFlagRetentionDuration
 		}
 
+		// When the retention time flag is set on config file it takes precedence.
+		if cfgFile.StorageConfig.TSDB.Retention.Time != 0 {
+			cfg.tsdb.RetentionDuration = cfgFile.StorageConfig.TSDB.Retention.Time
+		}
+
+		// When the retention size flag is set on config file it takes precedence.
+		if cfgFile.StorageConfig.TSDB.Retention.Size != 0 {
+			cfg.tsdb.MaxBytes = cfgFile.StorageConfig.TSDB.Retention.Size
+		}
+
 		if cfg.tsdb.RetentionDuration == 0 && cfg.tsdb.MaxBytes == 0 {
 			cfg.tsdb.RetentionDuration = defaultRetentionDuration
 			level.Info(logger).Log("msg", "No time or size retention was set so using the default time retention", "duration", defaultRetentionDuration)
@@ -398,6 +408,13 @@ func main() {
 			}
 			cfg.tsdb.RetentionDuration = y
 			level.Warn(logger).Log("msg", "Time retention value is too high. Limiting to: "+y.String())
+		}
+	}
+
+	{ // overlapping blocks config
+
+		if !cfgFile.StorageConfig.TSDB.Retention.AllowOverlappingBlocks {
+			cfg.tsdb.AllowOverlappingBlocks = cfgFile.StorageConfig.TSDB.Retention.AllowOverlappingBlocks
 		}
 	}
 
