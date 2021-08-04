@@ -40,6 +40,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 
+	"github.com/prometheus/prometheus/config"
 	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/tsdb/chunkenc"
@@ -3335,6 +3336,42 @@ func TestChunkQuerier_ShouldNotPanicIfHeadChunkIsTruncatedWhileReadingQueriedChu
 			testChunkQuerierShouldNotPanicIfHeadChunkIsTruncatedWhileReadingQueriedChunks(t)
 		})
 	}
+}
+
+func TestAllowOverlappingBlocks_ShouldPanicIfDisableBlocksOverlappingInConfigFileWhen_Reload(t *testing.T) {
+	db := openTestDB(t, nil, nil)
+
+	defer func() {
+		require.NoError(t, db.Close())
+	}()
+
+	db.opts.AllowOverlappingBlocks = true
+	cfg := &config.DefaultConfig
+	cfg.StorageConfig.TSDB = &config.TSDBConfig{
+		Retention: &config.TSDBRetentionConfig{
+			AllowOverlappingBlocks: false,
+		},
+	}
+
+	require.Error(t, db.ApplyConfig(cfg))
+}
+
+func TestAllowOverlappingBlocks_ShouldNotPanicIfDisableBlocksOverlappingInConfigFileWhen_Reload(t *testing.T) {
+	db := openTestDB(t, nil, nil)
+
+	defer func() {
+		require.NoError(t, db.Close())
+	}()
+
+	db.opts.AllowOverlappingBlocks = true
+	cfg := &config.DefaultConfig
+	cfg.StorageConfig.TSDB = &config.TSDBConfig{
+		Retention: &config.TSDBRetentionConfig{
+			AllowOverlappingBlocks: true,
+		},
+	}
+
+	require.NoError(t, db.ApplyConfig(cfg))
 }
 
 func testChunkQuerierShouldNotPanicIfHeadChunkIsTruncatedWhileReadingQueriedChunks(t *testing.T) {

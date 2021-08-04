@@ -844,6 +844,10 @@ func (db *DB) Appender(ctx context.Context) storage.Appender {
 }
 
 func (db *DB) ApplyConfig(conf *config.Config) error {
+	if db.opts.AllowOverlappingBlocks && !conf.StorageConfig.TSDB.Retention.AllowOverlappingBlocks {
+		return errors.Errorf("restart prometheus to disable overlapping blocks")
+	}
+
 	return db.head.ApplyConfig(conf)
 }
 
