@@ -195,7 +195,7 @@ var (
 
 	DefaultTSDBConfig = TSDBConfig{
 		Retention: &TSDBRetentionConfig{
-			Time:                   model.Duration(360 * time.Hour),
+			Time:                   model.Duration(15 * 24 * time.Hour),
 			Size:                   units.Base2Bytes(0),
 			AllowOverlappingBlocks: false,
 		},
