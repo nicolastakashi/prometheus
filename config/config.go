@@ -194,11 +194,9 @@ var (
 	}
 
 	DefaultTSDBConfig = TSDBConfig{
-		Retention: &TSDBRetentionConfig{
-			Time:                   model.Duration(15 * 24 * time.Hour),
-			Size:                   units.Base2Bytes(0),
-			AllowOverlappingBlocks: false,
-		},
+		RetentionTime:          model.Duration(15 * 24 * time.Hour),
+		RetentionSize:          units.Base2Bytes(0),
+		AllowOverlappingBlocks: false,
 	}
 )
 
@@ -496,12 +494,8 @@ type ExemplarsConfig struct {
 }
 
 type TSDBConfig struct {
-	Retention *TSDBRetentionConfig `yaml:"retention,omitempty"`
-}
-
-type TSDBRetentionConfig struct {
-	Time                   model.Duration   `yaml:"time,omitempty"`
-	Size                   units.Base2Bytes `yaml:"size,omitempty"`
+	RetentionTime          model.Duration   `yaml:"retention_time,omitempty"`
+	RetentionSize          units.Base2Bytes `yaml:"retention_size,omitempty"`
 	AllowOverlappingBlocks bool             `yaml:"allow_overlapping_blocks,omitempty"`
 }
 
