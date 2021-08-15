@@ -1376,11 +1376,12 @@ func TestStorageTSDBConfigs(t *testing.T) {
 	c, err := LoadFile("testdata/storage_tsdb.good.yml", false, log.NewNopLogger())
 	require.NoError(t, err)
 	exp := DefaultConfig
+
 	exp.StorageConfig = StorageConfig{
 		TSDB: &TSDBConfig{
 			RetentionTime:          model.Duration(24 * time.Hour),
 			RetentionSize:          units.Base2Bytes(5 * units.Gibibyte),
-			AllowOverlappingBlocks: true,
+			AllowOverlappingBlocks: AllowOverlappingBlocks(true),
 		},
 	}
 	require.Equal(t, exp, *c)

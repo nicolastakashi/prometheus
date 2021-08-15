@@ -111,6 +111,10 @@ func LoadFile(filename string, expandExternalLabels bool, logger log.Logger) (*C
 	return cfg, nil
 }
 
+func AllowOverlappingBlocks(allowOverlappingBlocks bool) *bool {
+	return &allowOverlappingBlocks
+}
+
 // The defaults applied before parsing the respective config sections.
 var (
 	// DefaultConfig is the default top-level configuration.
@@ -196,7 +200,7 @@ var (
 	DefaultTSDBConfig = TSDBConfig{
 		RetentionTime:          model.Duration(15 * 24 * time.Hour),
 		RetentionSize:          units.Base2Bytes(0),
-		AllowOverlappingBlocks: false,
+		AllowOverlappingBlocks: AllowOverlappingBlocks(false),
 	}
 )
 
@@ -496,7 +500,7 @@ type ExemplarsConfig struct {
 type TSDBConfig struct {
 	RetentionTime          model.Duration   `yaml:"retention_time,omitempty"`
 	RetentionSize          units.Base2Bytes `yaml:"retention_size,omitempty"`
-	AllowOverlappingBlocks bool             `yaml:"allow_overlapping_blocks,omitempty"`
+	AllowOverlappingBlocks *bool            `yaml:"allow_overlapping_blocks,omitempty"`
 }
 
 // AlertingConfig configures alerting and alertmanager related configs.

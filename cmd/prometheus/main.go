@@ -386,13 +386,13 @@ func main() {
 		}
 
 		// When the retention time flag is set on config file it takes precedence.
-		if cfgFile.StorageConfig.TSDB.Retention.Time != 0 {
+		if cfgFile.StorageConfig.TSDB.RetentionTime != 0 {
 			cfg.tsdb.RetentionDuration = cfgFile.StorageConfig.TSDB.Retention.Time
 		}
 
 		// When the retention size flag is set on config file it takes precedence.
-		if cfgFile.StorageConfig.TSDB.Retention.Size != 0 {
-			cfg.tsdb.MaxBytes = cfgFile.StorageConfig.TSDB.Retention.Size
+		if cfgFile.StorageConfig.TSDB.RetentionSize != 0 {
+			cfg.tsdb.MaxBytes = cfgFile.StorageConfig.TSDB.RetentionSize
 		}
 
 		if cfg.tsdb.RetentionDuration == 0 && cfg.tsdb.MaxBytes == 0 {
@@ -413,8 +413,8 @@ func main() {
 
 	{ // overlapping blocks config
 
-		if !cfgFile.StorageConfig.TSDB.Retention.AllowOverlappingBlocks {
-			cfg.tsdb.AllowOverlappingBlocks = cfgFile.StorageConfig.TSDB.Retention.AllowOverlappingBlocks
+		if cfgFile.StorageConfig.TSDB.AllowOverlappingBlocks != nil {
+			cfg.tsdb.AllowOverlappingBlocks = *cfgFile.StorageConfig.TSDB.AllowOverlappingBlocks
 		}
 	}
 
