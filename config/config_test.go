@@ -1372,6 +1372,10 @@ func kubernetesSDHostURL() config.URL {
 	return config.URL{URL: tURL}
 }
 
+func allowOverlappingBlocks(allowOverlappingBlocks bool) *bool {
+	return &allowOverlappingBlocks
+}
+
 func TestStorageTSDBConfigs(t *testing.T) {
 	c, err := LoadFile("testdata/storage_tsdb.good.yml", false, log.NewNopLogger())
 	require.NoError(t, err)
@@ -1381,7 +1385,7 @@ func TestStorageTSDBConfigs(t *testing.T) {
 		TSDB: &TSDBConfig{
 			RetentionTime:          model.Duration(24 * time.Hour),
 			RetentionSize:          units.Base2Bytes(5 * units.Gibibyte),
-			AllowOverlappingBlocks: AllowOverlappingBlocks(true),
+			AllowOverlappingBlocks: allowOverlappingBlocks(true),
 		},
 	}
 	require.Equal(t, exp, *c)

@@ -3338,7 +3338,11 @@ func TestChunkQuerier_ShouldNotPanicIfHeadChunkIsTruncatedWhileReadingQueriedChu
 	}
 }
 
-func TestAllowOverlappingBlocks_ShouldPanicIfDisableBlocksOverlappingInConfigFileWhen_Reload(t *testing.T) {
+func allowOverlappingBlocks(allowOverlappingBlocks bool) *bool {
+	return &allowOverlappingBlocks
+}
+
+func TestDBApplyConfig(t *testing.T) {
 	db := openTestDB(t, nil, nil)
 
 	defer func() {
@@ -3347,28 +3351,15 @@ func TestAllowOverlappingBlocks_ShouldPanicIfDisableBlocksOverlappingInConfigFil
 
 	db.opts.AllowOverlappingBlocks = true
 	cfg := &config.DefaultConfig
+
 	cfg.StorageConfig.TSDB = &config.TSDBConfig{
-		Retention: &config.TSDBRetentionConfig{
-			AllowOverlappingBlocks: false,
-		},
+		AllowOverlappingBlocks: allowOverlappingBlocks(false),
 	}
 
 	require.Error(t, db.ApplyConfig(cfg))
-}
 
-func TestAllowOverlappingBlocks_ShouldNotPanicIfDisableBlocksOverlappingInConfigFileWhen_Reload(t *testing.T) {
-	db := openTestDB(t, nil, nil)
-
-	defer func() {
-		require.NoError(t, db.Close())
-	}()
-
-	db.opts.AllowOverlappingBlocks = true
-	cfg := &config.DefaultConfig
 	cfg.StorageConfig.TSDB = &config.TSDBConfig{
-		Retention: &config.TSDBRetentionConfig{
-			AllowOverlappingBlocks: true,
-		},
+		AllowOverlappingBlocks: allowOverlappingBlocks(true),
 	}
 
 	require.NoError(t, db.ApplyConfig(cfg))
