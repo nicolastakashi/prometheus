@@ -387,7 +387,7 @@ func main() {
 
 		// When the retention time flag is set on config file it takes precedence.
 		if cfgFile.StorageConfig.TSDB.RetentionTime != 0 {
-			cfg.tsdb.RetentionDuration = cfgFile.StorageConfig.TSDB.Retention.Time
+			cfg.tsdb.RetentionDuration = cfgFile.StorageConfig.TSDB.RetentionTime
 		}
 
 		// When the retention size flag is set on config file it takes precedence.
