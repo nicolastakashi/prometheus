@@ -1383,9 +1383,11 @@ func TestStorageTSDBConfigs(t *testing.T) {
 
 	exp.StorageConfig = StorageConfig{
 		TSDB: &TSDBConfig{
-			RetentionTime:          model.Duration(24 * time.Hour),
-			RetentionSize:          units.Base2Bytes(5 * units.Gibibyte),
 			AllowOverlappingBlocks: allowOverlappingBlocks(true),
+			Retention: TSDBRetentionConfig{
+				Time: model.Duration(24 * time.Hour),
+				Size: units.Base2Bytes(5 * units.Gibibyte),
+			},
 		},
 	}
 	require.Equal(t, exp, *c)
