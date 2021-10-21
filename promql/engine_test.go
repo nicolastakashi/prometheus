@@ -72,7 +72,7 @@ func TestQueryConcurrency(t *testing.T) {
 		case <-processing:
 			// Expected.
 		case <-time.After(20 * time.Millisecond):
-			t.Fatalf("Query within concurrency threshold not being executed")
+			require.Fail(t, "Query within concurrency threshold not being executed")
 		}
 	}
 
@@ -81,7 +81,7 @@ func TestQueryConcurrency(t *testing.T) {
 
 	select {
 	case <-processing:
-		t.Fatalf("Query above concurrency threshold being executed")
+		require.Fail(t, "Query above concurrency threshold being executed")
 	case <-time.After(20 * time.Millisecond):
 		// Expected.
 	}
@@ -93,7 +93,7 @@ func TestQueryConcurrency(t *testing.T) {
 	case <-processing:
 		// Expected.
 	case <-time.After(20 * time.Millisecond):
-		t.Fatalf("Query within concurrency threshold not being executed")
+		require.Fail(t, "Query within concurrency threshold not being executed")
 	}
 
 	// Terminate remaining queries.
@@ -604,7 +604,7 @@ func TestEngineShutdown(t *testing.T) {
 	require.Equal(t, errQueryCanceled, res.Err)
 
 	query2 := engine.newTestQuery(func(context.Context) error {
-		t.Fatalf("reached query execution unexpectedly")
+		require.FailNow(t, "reached query execution unexpectedly")
 		return nil
 	})
 
@@ -1121,9 +1121,7 @@ func TestRecoverEvaluatorRuntime(t *testing.T) {
 	//nolint:govet
 	a[123] = 1
 
-	if err.Error() != "unexpected error" {
-		t.Fatalf("wrong error message: %q, expected %q", err, "unexpected error")
-	}
+	require.EqualError(t, err, "unexpected error")
 }
 
 func TestRecoverEvaluatorError(t *testing.T) {
@@ -1133,9 +1131,7 @@ func TestRecoverEvaluatorError(t *testing.T) {
 	e := errors.New("custom error")
 
 	defer func() {
-		if err.Error() != e.Error() {
-			t.Fatalf("wrong error message: %q, expected %q", err, e)
-		}
+		require.EqualError(t, err, e.Error())
 	}()
 	defer ev.recover(nil, &err)
 
@@ -1154,12 +1150,8 @@ func TestRecoverEvaluatorErrorWithWarnings(t *testing.T) {
 	}
 
 	defer func() {
-		if err.Error() != e.Error() {
-			t.Fatalf("wrong error message: %q, expected %q", err, e)
-		}
-		if len(ws) != len(warnings) && ws[0] != warnings[0] {
-			t.Fatalf("wrong warning message: %q, expected %q", ws[0], warnings[0])
-		}
+		require.EqualError(t, err, e.Error())
+		require.Equal(t, warnings, ws, "wrong warning message")
 	}()
 	defer ev.recover(&ws, &err)
 
@@ -2413,6 +2405,32 @@ func TestRangeQuery(t *testing.T) {
 			Result: Matrix{Series{
 				Points: []Point{{V: 1, T: 0}, {V: 3, T: 60000}, {V: 5, T: 120000}},
 				Metric: labels.Labels{labels.Label{Name: "__name__", Value: "metric"}}},
+			},
+			Start:    time.Unix(0, 0),
+			End:      time.Unix(120, 0),
+			Interval: 1 * time.Minute,
+		},
+		{
+			Name: "short-circuit",
+			Load: `load 30s
+							foo{job="1"} 1+1x4
+							bar{job="2"} 1+1x4`,
+			Query: `foo > 2 or bar`,
+			Result: Matrix{
+				Series{
+					Points: []Point{{V: 1, T: 0}, {V: 3, T: 60000}, {V: 5, T: 120000}},
+					Metric: labels.Labels{
+						labels.Label{Name: "__name__", Value: "bar"},
+						labels.Label{Name: "job", Value: "2"},
+					},
+				},
+				Series{
+					Points: []Point{{V: 3, T: 60000}, {V: 5, T: 120000}},
+					Metric: labels.Labels{
+						labels.Label{Name: "__name__", Value: "foo"},
+						labels.Label{Name: "job", Value: "1"},
+					},
+				},
 			},
 			Start:    time.Unix(0, 0),
 			End:      time.Unix(120, 0),

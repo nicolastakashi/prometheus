@@ -83,7 +83,7 @@ func (g *RuleGroups) Validate(node ruleGroups) (errs []error) {
 		set[g.Name] = struct{}{}
 
 		for i, r := range g.Rules {
-			for _, node := range r.Validate() {
+			for _, node := range g.Rules[i].Validate() {
 				var ruleName yaml.Node
 				if r.Alert.Value != "" {
 					ruleName = r.Alert
@@ -107,6 +107,7 @@ func (g *RuleGroups) Validate(node ruleGroups) (errs []error) {
 type RuleGroup struct {
 	Name     string         `yaml:"name"`
 	Interval model.Duration `yaml:"interval,omitempty"`
+	Limit    int            `yaml:"limit,omitempty"`
 	Rules    []RuleNode     `yaml:"rules"`
 }
 
@@ -237,6 +238,7 @@ func testTemplateParsing(rl *RuleNode) (errs []error) {
 			"__alert_"+rl.Alert.Value,
 			tmplData,
 			model.Time(timestamp.FromTime(time.Now())),
+			nil,
 			nil,
 			nil,
 		)

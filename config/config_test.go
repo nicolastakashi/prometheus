@@ -45,9 +45,11 @@ import (
 	"github.com/prometheus/prometheus/discovery/marathon"
 	"github.com/prometheus/prometheus/discovery/moby"
 	"github.com/prometheus/prometheus/discovery/openstack"
+	"github.com/prometheus/prometheus/discovery/puppetdb"
 	"github.com/prometheus/prometheus/discovery/scaleway"
 	"github.com/prometheus/prometheus/discovery/targetgroup"
 	"github.com/prometheus/prometheus/discovery/triton"
+	"github.com/prometheus/prometheus/discovery/uyuni"
 	"github.com/prometheus/prometheus/discovery/xds"
 	"github.com/prometheus/prometheus/discovery/zookeeper"
 	"github.com/prometheus/prometheus/pkg/labels"
@@ -101,6 +103,10 @@ var expectedConf = &Config{
 					ClientID:     "123",
 					ClientSecret: "456",
 					TokenURL:     "http://remote1/auth",
+					TLSConfig: config.TLSConfig{
+						CertFile: filepath.FromSlash("testdata/valid_cert_file"),
+						KeyFile:  filepath.FromSlash("testdata/valid_key_file"),
+					},
 				},
 				FollowRedirects: true,
 			},
@@ -563,6 +569,7 @@ var expectedConf = &Config{
 					AuthenticationMethod: "OAuth",
 					RefreshInterval:      model.Duration(5 * time.Minute),
 					Port:                 9100,
+					HTTPClientConfig:     config.DefaultHTTPClientConfig,
 				},
 			},
 		},
@@ -791,6 +798,34 @@ var expectedConf = &Config{
 			},
 		},
 		{
+			JobName: "service-puppetdb",
+
+			HonorTimestamps: true,
+			ScrapeInterval:  model.Duration(15 * time.Second),
+			ScrapeTimeout:   DefaultGlobalConfig.ScrapeTimeout,
+
+			MetricsPath:      DefaultScrapeConfig.MetricsPath,
+			Scheme:           DefaultScrapeConfig.Scheme,
+			HTTPClientConfig: config.DefaultHTTPClientConfig,
+
+			ServiceDiscoveryConfigs: discovery.Configs{&puppetdb.SDConfig{
+				URL:               "https://puppetserver/",
+				Query:             "resources { type = \"Package\" and title = \"httpd\" }",
+				IncludeParameters: true,
+				Port:              80,
+				RefreshInterval:   model.Duration(60 * time.Second),
+				HTTPClientConfig: config.HTTPClientConfig{
+					FollowRedirects: true,
+					TLSConfig: config.TLSConfig{
+						CAFile:   "testdata/valid_ca_file",
+						CertFile: "testdata/valid_cert_file",
+						KeyFile:  "testdata/valid_key_file",
+					},
+				},
+			},
+			},
+		},
+		{
 			JobName:         "hetzner",
 			HonorTimestamps: true,
 			ScrapeInterval:  model.Duration(15 * time.Second),
@@ -905,6 +940,26 @@ var expectedConf = &Config{
 				},
 			},
 		},
+		{
+			JobName: "uyuni",
+
+			HonorTimestamps:  true,
+			ScrapeInterval:   model.Duration(15 * time.Second),
+			ScrapeTimeout:    DefaultGlobalConfig.ScrapeTimeout,
+			HTTPClientConfig: config.HTTPClientConfig{FollowRedirects: true},
+			MetricsPath:      DefaultScrapeConfig.MetricsPath,
+			Scheme:           DefaultScrapeConfig.Scheme,
+			ServiceDiscoveryConfigs: discovery.Configs{
+				&uyuni.SDConfig{
+					Server:          kubernetesSDHostURL(),
+					Username:        "gopher",
+					Password:        "hole",
+					Entitlement:     "monitoring_entitled",
+					Separator:       ",",
+					RefreshInterval: model.Duration(60 * time.Second),
+				},
+			},
+		},
 	},
 	AlertingConfig: AlertingConfig{
 		AlertmanagerConfigs: []*AlertmanagerConfig{
@@ -989,7 +1044,7 @@ func TestElideSecrets(t *testing.T) {
 	yamlConfig := string(config)
 
 	matches := secretRe.FindAllStringIndex(yamlConfig, -1)
-	require.Equal(t, 15, len(matches), "wrong number of secret matches found")
+	require.Equal(t, 16, len(matches), "wrong number of secret matches found")
 	require.NotContains(t, yamlConfig, "mysecret",
 		"yaml marshal reveals authentication credentials.")
 }
@@ -1263,6 +1318,22 @@ var expectedErrors = []struct {
 		errMsg:   "empty or null section in static_configs",
 	},
 	{
+		filename: "puppetdb_no_query.bad.yml",
+		errMsg:   "query missing",
+	},
+	{
+		filename: "puppetdb_no_url.bad.yml",
+		errMsg:   "URL is missing",
+	},
+	{
+		filename: "puppetdb_bad_url.bad.yml",
+		errMsg:   "host is missing in URL",
+	},
+	{
+		filename: "puppetdb_no_scheme.bad.yml",
+		errMsg:   "URL scheme must be 'http' or 'https'",
+	},
+	{
 		filename: "hetzner_role.bad.yml",
 		errMsg:   "unknown role",
 	},
@@ -1301,6 +1372,10 @@ var expectedErrors = []struct {
 	{
 		filename: "http_url_bad_scheme.bad.yml",
 		errMsg:   "URL scheme must be 'http' or 'https'",
+	},
+	{
+		filename: "empty_scrape_config_action.bad.yml",
+		errMsg:   "relabel action cannot be empty",
 	},
 }
 

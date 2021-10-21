@@ -311,8 +311,8 @@ func (api *API) Register(r *route.Router) {
 	r.Get("/status/flags", wrap(api.serveFlags))
 	r.Get("/status/tsdb", wrap(api.serveTSDBStatus))
 	r.Get("/status/walreplay", api.serveWALReplayStatus)
-	r.Post("/read", api.ready(http.HandlerFunc(api.remoteRead)))
-	r.Post("/write", api.ready(http.HandlerFunc(api.remoteWrite)))
+	r.Post("/read", api.ready(api.remoteRead))
+	r.Post("/write", api.ready(api.remoteWrite))
 
 	r.Get("/alerts", wrap(api.alerts))
 	r.Get("/rules", wrap(api.rules))
@@ -760,6 +760,9 @@ type Target struct {
 	LastScrape         time.Time           `json:"lastScrape"`
 	LastScrapeDuration float64             `json:"lastScrapeDuration"`
 	Health             scrape.TargetHealth `json:"health"`
+
+	ScrapeInterval string `json:"scrapeInterval"`
+	ScrapeTimeout  string `json:"scrapeTimeout"`
 }
 
 // DroppedTarget has the information for one target that was dropped during relabelling.
@@ -899,6 +902,8 @@ func (api *API) targets(r *http.Request) apiFuncResult {
 					LastScrape:         target.LastScrape(),
 					LastScrapeDuration: target.LastScrapeDuration().Seconds(),
 					Health:             target.Health(),
+					ScrapeInterval:     target.GetValue(model.ScrapeIntervalLabel),
+					ScrapeTimeout:      target.GetValue(model.ScrapeTimeoutLabel),
 				})
 			}
 		}

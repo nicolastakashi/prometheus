@@ -18,7 +18,6 @@ import (
 	"container/heap"
 	"math"
 	"sort"
-	"strings"
 	"sync"
 
 	"github.com/pkg/errors"
@@ -197,15 +196,13 @@ func mergeStrings(a, b []string) []string {
 	res := make([]string, 0, maxl*10/9)
 
 	for len(a) > 0 && len(b) > 0 {
-		d := strings.Compare(a[0], b[0])
-
-		if d == 0 {
+		if a[0] == b[0] {
 			res = append(res, a[0])
 			a, b = a[1:], b[1:]
-		} else if d < 0 {
+		} else if a[0] < b[0] {
 			res = append(res, a[0])
 			a = a[1:]
-		} else if d > 0 {
+		} else {
 			res = append(res, b[0])
 			b = b[1:]
 		}
@@ -434,7 +431,7 @@ func ChainedSeriesMerge(series ...Series) Series {
 			for _, s := range series {
 				iterators = append(iterators, s.Iterator())
 			}
-			return newChainSampleIterator(iterators)
+			return NewChainSampleIterator(iterators)
 		},
 	}
 }
@@ -450,7 +447,10 @@ type chainSampleIterator struct {
 	lastt int64
 }
 
-func newChainSampleIterator(iterators []chunkenc.Iterator) chunkenc.Iterator {
+// NewChainSampleIterator returns a single iterator that iterates over the samples from the given iterators in a sorted
+// fashion. If samples overlap, one sample from overlapped ones is kept (randomly) and all others with the same
+// timestamp are dropped.
+func NewChainSampleIterator(iterators []chunkenc.Iterator) chunkenc.Iterator {
 	return &chainSampleIterator{
 		iterators: iterators,
 		h:         nil,
