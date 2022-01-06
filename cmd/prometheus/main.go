@@ -498,14 +498,11 @@ func main() {
 			level.Warn(logger).Log("msg", "Time retention value is too high. Limiting to: "+y.String())
 		}
 
-	{ // overlapping blocks config
-
 		if cfgFile.StorageConfig.TSDB.AllowOverlappingBlocks != nil {
 			cfg.tsdb.AllowOverlappingBlocks = *cfgFile.StorageConfig.TSDB.AllowOverlappingBlocks
 		}
-	}
 
-	{ // Max block size  settings.
+		// Max block size settings.
 		if cfg.tsdb.MaxBlockDuration == 0 {
 			maxBlockDuration, err := model.ParseDuration("31d")
 			if err != nil {
