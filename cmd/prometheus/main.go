@@ -473,14 +473,16 @@ func main() {
 			cfg.tsdb.RetentionDuration = newFlagRetentionDuration
 		}
 
+		var tsdbRetention *config.TSDBRetentionConfig = nil
+
 		// When the retention time flag is set on config file it takes precedence.
-		if cfgFile.StorageConfig.TSDB.Retention.Time != 0 {
-			cfg.tsdb.RetentionDuration = cfgFile.StorageConfig.TSDB.Retention.Time
+		if tsdbRetention != nil && tsdbRetention.Time != 0 {
+			cfg.tsdb.RetentionDuration = tsdbRetention.Time
 		}
 
 		// When the retention size flag is set on config file it takes precedence.
-		if cfgFile.StorageConfig.TSDB.Retention.Size != 0 {
-			cfg.tsdb.MaxBytes = cfgFile.StorageConfig.TSDB.Retention.Size
+		if tsdbRetention != nil && tsdbRetention.Size != 0 {
+			cfg.tsdb.MaxBytes = tsdbRetention.Size
 		}
 
 		if cfg.tsdb.RetentionDuration == 0 && cfg.tsdb.MaxBytes == 0 {
