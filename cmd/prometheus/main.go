@@ -654,8 +654,27 @@ func main() {
 
 	reloaders := []reloader{
 		{
-			name:     "db_storage",
-			reloader: localStorage.ApplyConfig,
+			name: "db_storage",
+			reloader: func(cfg *config.Config) error {
+				if cfg.StorageConfig.TSDB.Retention.Time == 0 && cfg.StorageConfig.TSDB.Retention.Size == 0 {
+					cfg.StorageConfig.TSDB.Retention.Size = units.Base2Bytes(defaultRetentionDuration)
+				}
+
+				if cfg.StorageConfig.TSDB.Retention.Time < 0 {
+					y, err := model.ParseDuration("100y")
+					if err != nil {
+						panic(err)
+					}
+					cfg.StorageConfig.TSDB.Retention.Time = y
+					level.Warn(logger).Log("msg", "Time retention value is too high. Limiting to: "+y.String())
+				}
+
+				if cfg.StorageConfig.TSDB.AllowOverlappingBlocks != nil {
+					cfg.StorageConfig.TSDB.AllowOverlappingBlocks = cfgFile.StorageConfig.TSDB.AllowOverlappingBlocks
+				}
+
+				return localStorage.ApplyConfig(cfg)
+			},
 		}, {
 			name:     "remote_storage",
 			reloader: remoteStorage.ApplyConfig,
