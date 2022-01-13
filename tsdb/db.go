@@ -838,7 +838,21 @@ func (db *DB) ApplyConfig(conf *config.Config) error {
 		return errors.Errorf("disabling overlapping blocks is not allowed live, restart prometheus to disable overlapping blocks")
 	}
 
-	return db.head.ApplyConfig(conf)
+	err := db.head.ApplyConfig(conf)
+	if err != nil {
+		return err
+	}
+
+	var mu sync.Mutex
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	db.opts.MaxBytes = int64(conf.StorageConfig.TSDB.Retention.Size)
+	db.opts.RetentionDuration = int64(conf.StorageConfig.TSDB.Retention.Time)
+	db.opts.AllowOverlappingBlocks = *conf.StorageConfig.TSDB.AllowOverlappingBlocks
+
+	return nil
 }
 
 // dbAppender wraps the DB's head appender and triggers compactions on commit
