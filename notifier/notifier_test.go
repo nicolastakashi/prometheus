@@ -35,12 +35,12 @@ import (
 
 	"github.com/prometheus/prometheus/config"
 	"github.com/prometheus/prometheus/discovery/targetgroup"
-	"github.com/prometheus/prometheus/pkg/labels"
-	"github.com/prometheus/prometheus/pkg/relabel"
+	"github.com/prometheus/prometheus/model/labels"
+	"github.com/prometheus/prometheus/model/relabel"
 )
 
 func TestPostPath(t *testing.T) {
-	var cases = []struct {
+	cases := []struct {
 		in, out string
 	}{
 		{
@@ -154,7 +154,7 @@ func TestHandlerSendAll(t *testing.T) {
 				Username: "prometheus",
 				Password: "testing_password",
 			},
-		}, "auth_alertmanager", config_util.WithHTTP2Disabled())
+		}, "auth_alertmanager")
 
 	h.alertmanagers = make(map[string]*alertmanagerSet)
 
@@ -392,7 +392,7 @@ func TestHandlerQueuing(t *testing.T) {
 				require.NoError(t, err)
 				return
 			case <-time.After(5 * time.Second):
-				t.Fatalf("Alerts were not pushed")
+				require.FailNow(t, "Alerts were not pushed.")
 			}
 		}
 	}
@@ -424,7 +424,7 @@ func TestHandlerQueuing(t *testing.T) {
 	case err := <-errc:
 		require.NoError(t, err)
 	case <-time.After(5 * time.Second):
-		t.Fatalf("Alerts were not pushed")
+		require.FailNow(t, "Alerts were not pushed.")
 	}
 
 	// Verify that we receive the last 3 batches.
@@ -447,7 +447,7 @@ func (a alertmanagerMock) url() *url.URL {
 
 func TestLabelSetNotReused(t *testing.T) {
 	tg := makeInputTargetGroup()
-	_, _, err := alertmanagerFromGroup(tg, &config.AlertmanagerConfig{})
+	_, _, err := AlertmanagerFromGroup(tg, &config.AlertmanagerConfig{})
 
 	require.NoError(t, err)
 
@@ -456,7 +456,7 @@ func TestLabelSetNotReused(t *testing.T) {
 }
 
 func TestReload(t *testing.T) {
-	var tests = []struct {
+	tests := []struct {
 		in  *targetgroup.Group
 		out string
 	}{
@@ -480,14 +480,12 @@ alerting:
   alertmanagers:
   - static_configs:
 `
-	if err := yaml.UnmarshalStrict([]byte(s), cfg); err != nil {
-		t.Fatalf("Unable to load YAML config: %s", err)
-	}
+	err := yaml.UnmarshalStrict([]byte(s), cfg)
+	require.NoError(t, err, "Unable to load YAML config.")
 	require.Equal(t, 1, len(cfg.AlertingConfig.AlertmanagerConfigs))
 
-	if err := n.ApplyConfig(cfg); err != nil {
-		t.Fatalf("Error Applying the config:%v", err)
-	}
+	err = n.ApplyConfig(cfg)
+	require.NoError(t, err, "Error applying the config.")
 
 	tgs := make(map[string][]*targetgroup.Group)
 	for _, tt := range tests {
@@ -502,11 +500,10 @@ alerting:
 
 		require.Equal(t, tt.out, res)
 	}
-
 }
 
 func TestDroppedAlertmanagers(t *testing.T) {
-	var tests = []struct {
+	tests := []struct {
 		in  *targetgroup.Group
 		out string
 	}{
@@ -534,14 +531,12 @@ alerting:
         regex: 'alertmanager:9093'
         action: drop
 `
-	if err := yaml.UnmarshalStrict([]byte(s), cfg); err != nil {
-		t.Fatalf("Unable to load YAML config: %s", err)
-	}
+	err := yaml.UnmarshalStrict([]byte(s), cfg)
+	require.NoError(t, err, "Unable to load YAML config.")
 	require.Equal(t, 1, len(cfg.AlertingConfig.AlertmanagerConfigs))
 
-	if err := n.ApplyConfig(cfg); err != nil {
-		t.Fatalf("Error Applying the config:%v", err)
-	}
+	err = n.ApplyConfig(cfg)
+	require.NoError(t, err, "Error applying the config.")
 
 	tgs := make(map[string][]*targetgroup.Group)
 	for _, tt := range tests {

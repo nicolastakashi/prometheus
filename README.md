@@ -55,18 +55,18 @@ Prometheus will now be reachable at http://localhost:9090/.
 
 ### Building from source
 
-To build Prometheus from source code, first ensure that have a working
-Go environment with [version 1.14 or greater installed](https://golang.org/doc/install).
-You also need [Node.js](https://nodejs.org/) and [Yarn](https://yarnpkg.com/)
-installed in order to build the frontend assets.
+To build Prometheus from source code, You need:
+* Go [version 1.16 or greater](https://golang.org/doc/install).
+* NodeJS [version 16 or greater](https://nodejs.org/).
+* npm [version 7 or greater](https://www.npmjs.com/).
 
 You can directly use the `go` tool to download and install the `prometheus`
 and `promtool` binaries into your `GOPATH`:
 
-    $ GO111MODULE=on go get github.com/prometheus/prometheus/cmd/...
+    $ GO111MODULE=on go install github.com/prometheus/prometheus/cmd/...
     $ prometheus --config.file=your_config.yml
 
-*However*, when using `go get` to build Prometheus, Prometheus will expect to be able to
+*However*, when using `go install` to build Prometheus, Prometheus will expect to be able to
 read its web assets from local filesystem directories under `web/ui/static` and
 `web/ui/templates`. In order for these assets to be found, you will have to run Prometheus
 from the root of the cloned repository. Note also that these directories do not include the
@@ -107,11 +107,11 @@ You can build a docker image locally with the following commands:
 
 ## React UI Development
 
-For more information on building, running, and developing on the new React-based UI, see the React app's [README.md](web/ui/react-app/README.md).
+For more information on building, running, and developing on the new React-based UI, see the React app's [README.md](web/ui/README.md).
 
 ## More information
 
-  * The source code is periodically indexed: [Prometheus Core](https://pkg.go.dev/github.com/prometheus/prometheus).
+  * The source code is periodically indexed, but due to an issue with versioning, the "latest" docs shown on Godoc are outdated. Instead, you can use [the docs for v2.31.1](https://pkg.go.dev/github.com/prometheus/prometheus@v1.8.2-0.20211105201321-411021ada9ab).
   * You will find a CircleCI configuration in [`.circleci/config.yml`](.circleci/config.yml).
   * See the [Community page](https://prometheus.io/community) for how to reach the Prometheus developers and users on various communication channels.
 

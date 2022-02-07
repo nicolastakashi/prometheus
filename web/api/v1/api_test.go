@@ -40,10 +40,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/prometheus/prometheus/config"
-	"github.com/prometheus/prometheus/pkg/exemplar"
-	"github.com/prometheus/prometheus/pkg/labels"
-	"github.com/prometheus/prometheus/pkg/textparse"
-	"github.com/prometheus/prometheus/pkg/timestamp"
+	"github.com/prometheus/prometheus/model/exemplar"
+	"github.com/prometheus/prometheus/model/labels"
+	"github.com/prometheus/prometheus/model/textparse"
+	"github.com/prometheus/prometheus/model/timestamp"
 	"github.com/prometheus/prometheus/prompb"
 	"github.com/prometheus/prometheus/promql"
 	"github.com/prometheus/prometheus/promql/parser"
@@ -126,9 +126,7 @@ func newTestTargetRetriever(targetsInfo []*testTargetParams) *testTargetRetrieve
 	}
 }
 
-var (
-	scrapeStart = time.Now().Add(-11 * time.Second)
-)
+var scrapeStart = time.Now().Add(-11 * time.Second)
 
 func (t testTargetRetriever) TargetsActive() map[string][]*scrape.Target {
 	return t.activeTargets
@@ -409,9 +407,7 @@ func TestEndpoints(t *testing.T) {
 			Format: &af,
 		}
 
-		dbDir, err := ioutil.TempDir("", "tsdb-api-ready")
-		require.NoError(t, err)
-		defer os.RemoveAll(dbDir)
+		dbDir := t.TempDir()
 
 		remote := remote.NewStorage(promlog.New(&promlogConfig), prometheus.DefaultRegisterer, func() (int64, error) {
 			return 0, nil
@@ -452,7 +448,6 @@ func TestEndpoints(t *testing.T) {
 
 		testEndpoints(t, api, testTargetRetriever, suite.ExemplarStorage(), false)
 	})
-
 }
 
 func TestLabelNames(t *testing.T) {
@@ -534,10 +529,12 @@ func setupTestTargetRetriever(t *testing.T) *testTargetRetriever {
 		{
 			Identifier: "test",
 			Labels: labels.FromMap(map[string]string{
-				model.SchemeLabel:      "http",
-				model.AddressLabel:     "example.com:8080",
-				model.MetricsPathLabel: "/metrics",
-				model.JobLabel:         "test",
+				model.SchemeLabel:         "http",
+				model.AddressLabel:        "example.com:8080",
+				model.MetricsPathLabel:    "/metrics",
+				model.JobLabel:            "test",
+				model.ScrapeIntervalLabel: "15s",
+				model.ScrapeTimeoutLabel:  "5s",
 			}),
 			DiscoveredLabels: nil,
 			Params:           url.Values{},
@@ -547,10 +544,12 @@ func setupTestTargetRetriever(t *testing.T) *testTargetRetriever {
 		{
 			Identifier: "blackbox",
 			Labels: labels.FromMap(map[string]string{
-				model.SchemeLabel:      "http",
-				model.AddressLabel:     "localhost:9115",
-				model.MetricsPathLabel: "/probe",
-				model.JobLabel:         "blackbox",
+				model.SchemeLabel:         "http",
+				model.AddressLabel:        "localhost:9115",
+				model.MetricsPathLabel:    "/probe",
+				model.JobLabel:            "blackbox",
+				model.ScrapeIntervalLabel: "20s",
+				model.ScrapeTimeoutLabel:  "10s",
 			}),
 			DiscoveredLabels: nil,
 			Params:           url.Values{"target": []string{"example.com"}},
@@ -561,10 +560,12 @@ func setupTestTargetRetriever(t *testing.T) *testTargetRetriever {
 			Identifier: "blackbox",
 			Labels:     nil,
 			DiscoveredLabels: labels.FromMap(map[string]string{
-				model.SchemeLabel:      "http",
-				model.AddressLabel:     "http://dropped.example.com:9115",
-				model.MetricsPathLabel: "/probe",
-				model.JobLabel:         "blackbox",
+				model.SchemeLabel:         "http",
+				model.AddressLabel:        "http://dropped.example.com:9115",
+				model.MetricsPathLabel:    "/probe",
+				model.JobLabel:            "blackbox",
+				model.ScrapeIntervalLabel: "30s",
+				model.ScrapeTimeoutLabel:  "15s",
 			}),
 			Params: url.Values{},
 			Active: false,
@@ -645,7 +646,7 @@ func testEndpoints(t *testing.T, api *API, tr *testTargetRetriever, es storage.E
 		exemplars   []exemplar.QueryResult
 	}
 
-	var tests = []test{
+	tests := []test{
 		{
 			endpoint: api.query,
 			query: url.Values{
@@ -951,6 +952,8 @@ func testEndpoints(t *testing.T, api *API, tr *testTargetRetriever, es storage.E
 						LastError:          "failed: missing port in address",
 						LastScrape:         scrapeStart,
 						LastScrapeDuration: 0.1,
+						ScrapeInterval:     "20s",
+						ScrapeTimeout:      "10s",
 					},
 					{
 						DiscoveredLabels: map[string]string{},
@@ -964,15 +967,19 @@ func testEndpoints(t *testing.T, api *API, tr *testTargetRetriever, es storage.E
 						LastError:          "",
 						LastScrape:         scrapeStart,
 						LastScrapeDuration: 0.07,
+						ScrapeInterval:     "15s",
+						ScrapeTimeout:      "5s",
 					},
 				},
 				DroppedTargets: []*DroppedTarget{
 					{
 						DiscoveredLabels: map[string]string{
-							"__address__":      "http://dropped.example.com:9115",
-							"__metrics_path__": "/probe",
-							"__scheme__":       "http",
-							"job":              "blackbox",
+							"__address__":         "http://dropped.example.com:9115",
+							"__metrics_path__":    "/probe",
+							"__scheme__":          "http",
+							"job":                 "blackbox",
+							"__scrape_interval__": "30s",
+							"__scrape_timeout__":  "15s",
 						},
 					},
 				},
@@ -997,6 +1004,8 @@ func testEndpoints(t *testing.T, api *API, tr *testTargetRetriever, es storage.E
 						LastError:          "failed: missing port in address",
 						LastScrape:         scrapeStart,
 						LastScrapeDuration: 0.1,
+						ScrapeInterval:     "20s",
+						ScrapeTimeout:      "10s",
 					},
 					{
 						DiscoveredLabels: map[string]string{},
@@ -1010,15 +1019,19 @@ func testEndpoints(t *testing.T, api *API, tr *testTargetRetriever, es storage.E
 						LastError:          "",
 						LastScrape:         scrapeStart,
 						LastScrapeDuration: 0.07,
+						ScrapeInterval:     "15s",
+						ScrapeTimeout:      "5s",
 					},
 				},
 				DroppedTargets: []*DroppedTarget{
 					{
 						DiscoveredLabels: map[string]string{
-							"__address__":      "http://dropped.example.com:9115",
-							"__metrics_path__": "/probe",
-							"__scheme__":       "http",
-							"job":              "blackbox",
+							"__address__":         "http://dropped.example.com:9115",
+							"__metrics_path__":    "/probe",
+							"__scheme__":          "http",
+							"job":                 "blackbox",
+							"__scrape_interval__": "30s",
+							"__scrape_timeout__":  "15s",
 						},
 					},
 				},
@@ -1043,6 +1056,8 @@ func testEndpoints(t *testing.T, api *API, tr *testTargetRetriever, es storage.E
 						LastError:          "failed: missing port in address",
 						LastScrape:         scrapeStart,
 						LastScrapeDuration: 0.1,
+						ScrapeInterval:     "20s",
+						ScrapeTimeout:      "10s",
 					},
 					{
 						DiscoveredLabels: map[string]string{},
@@ -1056,6 +1071,8 @@ func testEndpoints(t *testing.T, api *API, tr *testTargetRetriever, es storage.E
 						LastError:          "",
 						LastScrape:         scrapeStart,
 						LastScrapeDuration: 0.07,
+						ScrapeInterval:     "15s",
+						ScrapeTimeout:      "5s",
 					},
 				},
 				DroppedTargets: []*DroppedTarget{},
@@ -1071,10 +1088,12 @@ func testEndpoints(t *testing.T, api *API, tr *testTargetRetriever, es storage.E
 				DroppedTargets: []*DroppedTarget{
 					{
 						DiscoveredLabels: map[string]string{
-							"__address__":      "http://dropped.example.com:9115",
-							"__metrics_path__": "/probe",
-							"__scheme__":       "http",
-							"job":              "blackbox",
+							"__address__":         "http://dropped.example.com:9115",
+							"__metrics_path__":    "/probe",
+							"__scheme__":          "http",
+							"job":                 "blackbox",
+							"__scrape_interval__": "30s",
+							"__scrape_timeout__":  "15s",
 						},
 					},
 				},
@@ -1451,8 +1470,8 @@ func testEndpoints(t *testing.T, api *API, tr *testTargetRetriever, es storage.E
 						Name:     "grp",
 						File:     "/path/to/file",
 						Interval: 1,
-						Rules: []rule{
-							alertingRule{
+						Rules: []Rule{
+							AlertingRule{
 								State:       "inactive",
 								Name:        "test_metric3",
 								Query:       "absent(test_metric3) != 1",
@@ -1463,7 +1482,7 @@ func testEndpoints(t *testing.T, api *API, tr *testTargetRetriever, es storage.E
 								Health:      "unknown",
 								Type:        "alerting",
 							},
-							alertingRule{
+							AlertingRule{
 								State:       "inactive",
 								Name:        "test_metric4",
 								Query:       "up == 1",
@@ -1474,7 +1493,7 @@ func testEndpoints(t *testing.T, api *API, tr *testTargetRetriever, es storage.E
 								Health:      "unknown",
 								Type:        "alerting",
 							},
-							recordingRule{
+							RecordingRule{
 								Name:   "recording-rule-1",
 								Query:  "vector(1)",
 								Labels: labels.Labels{},
@@ -1497,8 +1516,8 @@ func testEndpoints(t *testing.T, api *API, tr *testTargetRetriever, es storage.E
 						Name:     "grp",
 						File:     "/path/to/file",
 						Interval: 1,
-						Rules: []rule{
-							alertingRule{
+						Rules: []Rule{
+							AlertingRule{
 								State:       "inactive",
 								Name:        "test_metric3",
 								Query:       "absent(test_metric3) != 1",
@@ -1509,7 +1528,7 @@ func testEndpoints(t *testing.T, api *API, tr *testTargetRetriever, es storage.E
 								Health:      "unknown",
 								Type:        "alerting",
 							},
-							alertingRule{
+							AlertingRule{
 								State:       "inactive",
 								Name:        "test_metric4",
 								Query:       "up == 1",
@@ -1536,8 +1555,8 @@ func testEndpoints(t *testing.T, api *API, tr *testTargetRetriever, es storage.E
 						Name:     "grp",
 						File:     "/path/to/file",
 						Interval: 1,
-						Rules: []rule{
-							recordingRule{
+						Rules: []Rule{
+							RecordingRule{
 								Name:   "recording-rule-1",
 								Query:  "vector(1)",
 								Labels: labels.Labels{},
@@ -2113,7 +2132,7 @@ func assertAPIError(t *testing.T, got *apiError, exp errorType) {
 	}
 }
 
-func assertAPIResponse(t *testing.T, got interface{}, exp interface{}) {
+func assertAPIResponse(t *testing.T, got, exp interface{}) {
 	t.Helper()
 
 	require.Equal(t, exp, got)
@@ -2155,6 +2174,7 @@ func (f *fakeDB) Stats(statsByLabelName string) (_ *tsdb.Stats, retErr error) {
 	h, _ := tsdb.NewHead(nil, nil, nil, opts, nil)
 	return h.Stats(statsByLabelName), nil
 }
+
 func (f *fakeDB) WALReplayStatus() (tsdb.WALReplayStatus, error) {
 	return tsdb.WALReplayStatus{}, nil
 }
@@ -2322,8 +2342,7 @@ func TestAdminEndpoints(t *testing.T) {
 	} {
 		tc := tc
 		t.Run("", func(t *testing.T) {
-			dir, _ := ioutil.TempDir("", "fakeDB")
-			defer func() { require.NoError(t, os.RemoveAll(dir)) }()
+			dir := t.TempDir()
 
 			api := &API{
 				db:          tc.db,
@@ -2425,7 +2444,7 @@ func TestParseTimeParam(t *testing.T) {
 	ts, err := parseTime("1582468023986")
 	require.NoError(t, err)
 
-	var tests = []struct {
+	tests := []struct {
 		paramName    string
 		paramValue   string
 		defaultValue time.Time
@@ -2484,7 +2503,7 @@ func TestParseTime(t *testing.T) {
 		panic(err)
 	}
 
-	var tests = []struct {
+	tests := []struct {
 		input  string
 		fail   bool
 		result time.Time
@@ -2492,25 +2511,32 @@ func TestParseTime(t *testing.T) {
 		{
 			input: "",
 			fail:  true,
-		}, {
+		},
+		{
 			input: "abc",
 			fail:  true,
-		}, {
+		},
+		{
 			input: "30s",
 			fail:  true,
-		}, {
+		},
+		{
 			input:  "123",
 			result: time.Unix(123, 0),
-		}, {
+		},
+		{
 			input:  "123.123",
 			result: time.Unix(123, 123000000),
-		}, {
+		},
+		{
 			input:  "2015-06-03T13:21:58.555Z",
 			result: ts,
-		}, {
+		},
+		{
 			input:  "2015-06-03T14:21:58.555+01:00",
 			result: ts,
-		}, {
+		},
+		{
 			// Test float rounding.
 			input:  "1543578564.705",
 			result: time.Unix(1543578564, 705*1e6),
@@ -2542,7 +2568,7 @@ func TestParseTime(t *testing.T) {
 }
 
 func TestParseDuration(t *testing.T) {
-	var tests = []struct {
+	tests := []struct {
 		input  string
 		fail   bool
 		result time.Duration

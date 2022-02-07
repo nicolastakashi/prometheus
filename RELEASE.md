@@ -34,8 +34,12 @@ Release cadence of first pre-releases being cut is 6 weeks.
 | v2.27          | 2021-05-05                                 | Chris Marchbanks (GitHub: @csmarchbanks)    |
 | v2.28          | 2021-06-16                                 | Julius Volz (GitHub: @juliusv)              |
 | v2.29          | 2021-07-28                                 | Frederic Branczyk (GitHub: @brancz)         |
-| v2.30          | 2021-09-08                                 | **searching for volunteer**                 |
-| v2.31          | 2021-10-20                                 | **searching for volunteer**                 |
+| v2.30          | 2021-09-08                                 | Ganesh Vernekar (GitHub: @codesome)         |
+| v2.31          | 2021-10-20                                 | Julien Pivotto (GitHub: @roidelapluie)      |
+| v2.32          | 2021-12-01                                 | Julius Volz (GitHub: @juliusv)              |
+| v2.33          | 2022-01-12                                 | Björn Rabenstein (GitHub: @beorn7)          |
+| v2.34          | 2022-02-23                                 | Chris Marchbanks (GitHub: @csmarchbanks)    |
+| v2.35          | 2022-04-06                                 | **searching for volunteer**                 |
 
 If you are interested in volunteering please create a pull request against the [prometheus/prometheus](https://github.com/prometheus/prometheus) repository and propose yourself for the release series of your choice.
 
@@ -68,7 +72,7 @@ If a bug fix got accidentally merged into main after non-bug-fix changes in main
 
 Maintaining the release branches for older minor releases happens on a best effort basis.
 
-### 0. Updating dependencies
+### 0. Updating dependencies and promoting/demoting experimental features
 
 A few days before a major or minor release, consider updating the dependencies.
 
@@ -83,6 +87,10 @@ you can skip the dependency update or only update select dependencies. In such a
 case, you have to create an issue or pull request in the GitHub project for
 later follow-up.
 
+This is also a good time to consider any experimental features and feature
+flags for promotion to stable or for deprecation or ultimately removal. Do any
+of these in pull requests, one per feature.
+
 #### Updating Go dependencies
 
 ```
@@ -93,21 +101,13 @@ git commit -m "Update dependencies"
 
 #### Updating React dependencies
 
-Either upgrade the dependencies within their existing version constraints as specified in the `package.json` file (see https://docs.npmjs.com/files/package.json#dependencies):
+The React application recently moved to a monorepo system with multiple internal npm packages. Dependency upgrades are
+quite sensitive for the time being and should be done manually with caution. 
 
-```
-cd web/ui/react-app
-yarn upgrade
-git add yarn.lock
-```
+When you want to update a dependency, you have to go to every internal npm package where the dependency is used and
+manually change the version. Once you have taken care of that, you need to go back to `web/ui` and run `npm install`
 
-Or alternatively, update all dependencies to their latest major versions. This is potentially more disruptive and will require more follow-up fixes, but should be done from time to time (use your best judgement):
-
-```
-cd web/ui/react-app
-yarn upgrade --latest
-git add package.json yarn.lock
-```
+**NOTE**: We are researching ways to automate and improve this.
 
 ### 1. Prepare your release
 
@@ -161,3 +161,5 @@ For release candidate versions (`v2.16.0-rc.0`), run the benchmark for 3 days us
 If the release has happened in the latest release branch, merge the changes into main.
 
 Once the binaries have been uploaded, announce the release on `prometheus-announce@googlegroups.com`. (Please do not use `prometheus-users@googlegroups.com` for announcements anymore.) Check out previous announcement mails for inspiration.
+
+Finally, in case there is no release shepherd listed for the next release yet, find a volunteer.
