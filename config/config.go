@@ -569,6 +569,62 @@ func (t *TracingConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	return nil
 }
 
+type TracingClientType string
+
+const (
+	TracingClientHTTP TracingClientType = "http"
+	TracingClientGRPC TracingClientType = "grpc"
+)
+
+// UnmarshalYAML implements the yaml.Unmarshaler interface.
+func (t *TracingClientType) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	*t = TracingClientType("")
+	type plain TracingClientType
+	if err := unmarshal((*plain)(t)); err != nil {
+		return err
+	}
+
+	if *t != TracingClientHTTP && *t != TracingClientGRPC {
+		return fmt.Errorf("expected tracing client type to be to be %s or %s, but got %s",
+			TracingClientHTTP, TracingClientGRPC, *t,
+		)
+	}
+
+	return nil
+}
+
+// TracingConfig configures the tracing options.
+type TracingConfig struct {
+	ClientType       TracingClientType `yaml:"client_type,omitempty"`
+	Endpoint         string            `yaml:"endpoint,omitempty"`
+	SamplingFraction float64           `yaml:"sampling_fraction,omitempty"`
+	Insecure         bool              `yaml:"insecure,omitempty"`
+	TLSConfig        config.TLSConfig  `yaml:"tls_config,omitempty"`
+}
+
+// SetDirectory joins any relative file paths with dir.
+func (t *TracingConfig) SetDirectory(dir string) {
+	t.TLSConfig.SetDirectory(dir)
+}
+
+// UnmarshalYAML implements the yaml.Unmarshaler interface.
+func (t *TracingConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	*t = TracingConfig{
+		ClientType: TracingClientGRPC,
+		Insecure:   true,
+	}
+	type plain TracingConfig
+	if err := unmarshal((*plain)(t)); err != nil {
+		return err
+	}
+
+	if t.Endpoint == "" {
+		return errors.New("tracing endpoint must be set")
+	}
+
+	return nil
+}
+
 // ExemplarsConfig configures runtime reloadable configuration options.
 type ExemplarsConfig struct {
 	// MaxExemplars sets the size, in # of exemplars stored, of the single circular buffer used to store exemplars in memory.
