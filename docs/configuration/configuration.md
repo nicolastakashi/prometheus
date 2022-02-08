@@ -34,6 +34,7 @@ Generic placeholders are defined as follows:
 * `<boolean>`: a boolean that can take the values `true` or `false`
 * `<duration>`: a duration matching the regular expression `((([0-9]+)y)?(([0-9]+)w)?(([0-9]+)d)?(([0-9]+)h)?(([0-9]+)m)?(([0-9]+)s)?(([0-9]+)ms)?|0)`, e.g. `1d`, `1h30m`, `5m`, `10s`
 * `<filename>`: a valid path in the current working directory
+* `<float>`: a floating-point number
 * `<host>`: a valid string consisting of a hostname or IP followed by an optional port number
 * `<int>`: an integer value
 * `<labelname>`: a string matching the regular expression `[a-zA-Z_][a-zA-Z0-9_]*`
@@ -95,6 +96,14 @@ remote_write:
 # Settings related to the remote read feature.
 remote_read:
   [ - <remote_read> ... ]
+
+# Storage related settings that are runtime reloadable.
+storage:
+  [ - <exemplars> ... ]
+
+# Configures exporting traces.
+tracing:
+  [ <tracing_config> ]
 ```
 
 ### `<scrape_config>`
@@ -187,7 +196,7 @@ oauth2:
   [ <oauth2> ]
 
 # Configure whether scrape requests follow HTTP 3xx redirects.
-[ follow_redirects: <bool> | default = true ]
+[ follow_redirects: <boolean> | default = true ]
 
 # Configures the scrape request's TLS settings.
 tls_config:
@@ -272,6 +281,10 @@ nerve_sd_configs:
 openstack_sd_configs:
   [ - <openstack_sd_config> ... ]
 
+# List of PuppetDB service discovery configurations.
+puppetdb_sd_configs:
+  [ - <puppetdb_sd_config> ... ]
+
 # List of Scaleway service discovery configurations.
 scaleway_sd_configs:
   [ - <scaleway_sd_config> ... ]
@@ -283,6 +296,10 @@ serverset_sd_configs:
 # List of Triton service discovery configurations.
 triton_sd_configs:
   [ - <triton_sd_config> ... ]
+
+# List of Uyuni service discovery configurations.
+uyuni_sd_configs:
+  [ - <uyuni_sd_config> ... ]
 
 # List of labeled statically configured targets for this job.
 static_configs:
@@ -375,6 +392,10 @@ token_url: <string>
 # Optional parameters to append to the token URL.
 endpoint_params:
   [ <string>: <string> ... ]
+
+# Configures the token request's TLS settings.
+tls_config:
+  [ <tls_config> ]
 ```
 
 ### `<azure_sd_config>`
@@ -421,6 +442,42 @@ subscription_id: <string>
 # The port to scrape metrics from. If using the public IP address, this must
 # instead be specified in the relabeling rule.
 [ port: <int> | default = 80 ]
+
+# Authentication information used to authenticate to the Azure API.
+# Note that `basic_auth`, `authorization` and `oauth2` options are
+# mutually exclusive.
+# `password` and `password_file` are mutually exclusive.
+
+# Optional HTTP basic authentication information, currently not support by Azure.
+basic_auth:
+  [ username: <string> ]
+  [ password: <secret> ]
+  [ password_file: <string> ]
+
+# Optional `Authorization` header configuration, currently not supported by Azure.
+authorization:
+  # Sets the authentication type.
+  [ type: <string> | default: Bearer ]
+  # Sets the credentials. It is mutually exclusive with
+  # `credentials_file`.
+  [ credentials: <secret> ]
+  # Sets the credentials to the credentials read from the configured file.
+  # It is mutually exclusive with `credentials`.
+  [ credentials_file: <filename> ]
+
+# Optional OAuth 2.0 configuration, currently not supported by Azure.
+oauth2:
+  [ <oauth2> ]
+
+# Optional proxy URL.
+[ proxy_url: <string> ]
+
+# Configure whether HTTP requests follow HTTP 3xx redirects.
+[ follow_redirects: <boolean> | default = true ]
+
+# TLS configuration.
+tls_config:
+  [ <tls_config> ]
 ```
 
 ### `<consul_sd_config>`
@@ -512,7 +569,7 @@ oauth2:
 [ proxy_url: <string> ]
 
 # Configure whether HTTP requests follow HTTP 3xx redirects.
-[ follow_redirects: <bool> | default = true ]
+[ follow_redirects: <boolean> | default = true ]
 
 # TLS configuration.
 tls_config:
@@ -587,7 +644,7 @@ oauth2:
 [ proxy_url: <string> ]
 
 # Configure whether HTTP requests follow HTTP 3xx redirects.
-[ follow_redirects: <bool> | default = true ]
+[ follow_redirects: <boolean> | default = true ]
 
 # TLS configuration.
 tls_config:
@@ -640,12 +697,13 @@ tls_config:
 # tasks and services that don't have published ports.
 [ port: <int> | default = 80 ]
 
+# The host to use if the container is in host networking mode.
+[ host_networking_host: <string> | default = "localhost" ]
+
 # Optional filters to limit the discovery process to a subset of available
 # resources.
 # The available filters are listed in the upstream documentation:
-# Services: https://docs.docker.com/engine/api/v1.40/#operation/ServiceList
-# Tasks: https://docs.docker.com/engine/api/v1.40/#operation/TaskList
-# Nodes: https://docs.docker.com/engine/api/v1.40/#operation/NodeList
+# https://docs.docker.com/engine/api/v1.40/#operation/ContainerList
 [ filters:
   [ - name: <string>
       values: <string>, [...] ]
@@ -681,7 +739,7 @@ oauth2:
   [ <oauth2> ]
 
 # Configure whether HTTP requests follow HTTP 3xx redirects.
-[ follow_redirects: <bool> | default = true ]
+[ follow_redirects: <boolean> | default = true ]
 
 ```
 
@@ -808,7 +866,9 @@ role: <string>
 # Optional filters to limit the discovery process to a subset of available
 # resources.
 # The available filters are listed in the upstream documentation:
-# https://docs.docker.com/engine/api/v1.40/#operation/ContainerList
+# Services: https://docs.docker.com/engine/api/v1.40/#operation/ServiceList
+# Tasks: https://docs.docker.com/engine/api/v1.40/#operation/TaskList
+# Nodes: https://docs.docker.com/engine/api/v1.40/#operation/NodeList
 [ filters:
   [ - name: <string>
       values: <string>, [...] ]
@@ -844,7 +904,7 @@ oauth2:
   [ <oauth2> ]
 
 # Configure whether HTTP requests follow HTTP 3xx redirects.
-[ follow_redirects: <bool> | default = true ]
+[ follow_redirects: <boolean> | default = true ]
 
 ```
 
@@ -898,7 +958,7 @@ The following meta labels are available on targets during [relabeling](#relabel_
 * `__meta_ec2_ami`: the EC2 Amazon Machine Image
 * `__meta_ec2_architecture`: the architecture of the instance
 * `__meta_ec2_availability_zone`: the availability zone in which the instance is running
-* `__meta_ec2_availability_zone_id`: the [availability zone ID](https://docs.aws.amazon.com/ram/latest/userguide/working-with-az-ids.html) in which the instance is running
+* `__meta_ec2_availability_zone_id`: the [availability zone ID](https://docs.aws.amazon.com/ram/latest/userguide/working-with-az-ids.html) in which the instance is running (requires `ec2:DescribeAvailabilityZones`)
 * `__meta_ec2_instance_id`: the EC2 instance ID
 * `__meta_ec2_instance_lifecycle`: the lifecycle of the EC2 instance, set only for 'spot' or 'scheduled' instances, absent otherwise
 * `__meta_ec2_instance_state`: the state of the EC2 instance
@@ -972,8 +1032,8 @@ address defaults to the `host_ip` attribute of the hypervisor.
 The following meta labels are available on targets during [relabeling](#relabel_config):
 
 * `__meta_openstack_hypervisor_host_ip`: the hypervisor node's IP address.
+* `__meta_openstack_hypervisor_hostname`: the hypervisor node's name.
 * `__meta_openstack_hypervisor_id`: the hypervisor node's ID.
-* `__meta_openstack_hypervisor_name`: the hypervisor node's name.
 * `__meta_openstack_hypervisor_state`: the hypervisor node's state.
 * `__meta_openstack_hypervisor_status`: the hypervisor node's status.
 * `__meta_openstack_hypervisor_type`: the hypervisor node's type.
@@ -1065,6 +1125,94 @@ region: <string>
 tls_config:
   [ <tls_config> ]
 ```
+
+### `<puppetdb_sd_config>`
+
+PuppetDB SD configurations allow retrieving scrape targets from
+[PuppetDB](https://puppet.com/docs/puppetdb/latest/index.html) resources.
+
+This SD discovers resources and will create a target for each resource returned
+by the API.
+
+The resource address is the `certname` of the resource and can be changed during
+[relabeling](#relabel_config).
+
+The following meta labels are available on targets during [relabeling](#relabel_config):
+
+* `__meta_puppetdb_certname`: the name of the node associated with the resource
+* `__meta_puppetdb_resource`: a SHA-1 hash of the resource’s type, title, and parameters, for identification
+* `__meta_puppetdb_type`: the resource type
+* `__meta_puppetdb_title`: the resource title
+* `__meta_puppetdb_exported`: whether the resource is exported (`"true"` or `"false"`)
+* `__meta_puppetdb_tags`: comma separated list of resource tags
+* `__meta_puppetdb_file`: the manifest file in which the resource was declared
+* `__meta_puppetdb_environment`: the environment of the node associated with the resource
+* `__meta_puppetdb_parameter_<parametername>`: the parameters of the resource
+
+
+See below for the configuration options for PuppetDB discovery:
+
+```yaml
+# The URL of the PuppetDB root query endpoint.
+url: <string>
+
+# Puppet Query Language (PQL) query. Only resources are supported.
+# https://puppet.com/docs/puppetdb/latest/api/query/v4/pql.html
+query: <string>
+
+# Whether to include the parameters as meta labels.
+# Due to the differences between parameter types and Prometheus labels,
+# some parameters might not be rendered. The format of the parameters might
+# also change in future releases.
+#
+# Note: Enabling this exposes parameters in the Prometheus UI and API. Make sure
+# that you don't have secrets exposed as parameters if you enable this.
+[ include_parameters: <boolean> | default = false ]
+
+# Refresh interval to re-read the resources list.
+[ refresh_interval: <duration> | default = 60s ]
+
+# The port to scrape metrics from.
+[ port: <int> | default = 80 ]
+
+# TLS configuration to connect to the PuppetDB.
+tls_config:
+  [ <tls_config> ]
+
+# basic_auth, authorization, and oauth2, are mutually exclusive.
+
+# Optional HTTP basic authentication information.
+basic_auth:
+  [ username: <string> ]
+  [ password: <secret> ]
+  [ password_file: <string> ]
+
+# `Authorization` HTTP header configuration.
+authorization:
+  # Sets the authentication type.
+  [ type: <string> | default: Bearer ]
+  # Sets the credentials. It is mutually exclusive with
+  # `credentials_file`.
+  [ credentials: <secret> ]
+  # Sets the credentials with the credentials read from the configured file.
+  # It is mutually exclusive with `credentials`.
+  [ credentials_file: <filename> ]
+
+# Optional OAuth 2.0 configuration.
+# Cannot be used at the same time as basic_auth or authorization.
+oauth2:
+  [ <oauth2> ]
+
+# Optional proxy URL.
+[ proxy_url: <string> ]
+
+# Configure whether HTTP requests follow HTTP 3xx redirects.
+[ follow_redirects: <boolean> | default = true ]
+```
+
+See [this example Prometheus configuration file](/documentation/examples/prometheus-puppetdb.yml)
+for a detailed example of configuring Prometheus with PuppetDB.
+
 
 ### `<file_sd_config>`
 
@@ -1263,7 +1411,7 @@ oauth2:
 [ proxy_url: <string> ]
 
 # Configure whether HTTP requests follow HTTP 3xx redirects.
-[ follow_redirects: <bool> | default = true ]
+[ follow_redirects: <boolean> | default = true ]
 
 # TLS configuration.
 tls_config:
@@ -1344,7 +1492,7 @@ oauth2:
 [ proxy_url: <string> ]
 
 # Configure whether HTTP requests follow HTTP 3xx redirects.
-[ follow_redirects: <bool> | default = true ]
+[ follow_redirects: <boolean> | default = true ]
 
 # TLS configuration.
 tls_config:
@@ -1370,6 +1518,7 @@ node object in the address type order of `NodeInternalIP`, `NodeExternalIP`,
 Available meta labels:
 
 * `__meta_kubernetes_node_name`: The name of the node object.
+* `__meta_kubernetes_node_provider_id`: The cloud provider's name for the node object.
 * `__meta_kubernetes_node_label_<labelname>`: Each label from the node object.
 * `__meta_kubernetes_node_labelpresent_<labelname>`: `true` for each label from the node object.
 * `__meta_kubernetes_node_annotation_<annotationname>`: Each annotation from the node object.
@@ -1451,6 +1600,30 @@ Available meta labels:
 * If the endpoints belong to a service, all labels of the `role: service` discovery are attached.
 * For all targets backed by a pod, all labels of the `role: pod` discovery are attached.
 
+#### `endpointslice`
+
+The `endpointslice` role discovers targets from existing endpointslices. For each endpoint
+address referenced in the endpointslice object one target is discovered. If the endpoint is backed by a pod, all
+additional container ports of the pod, not bound to an endpoint port, are discovered as targets as well.
+
+Available meta labels:
+
+* `__meta_kubernetes_namespace`: The namespace of the endpoints object.
+* `__meta_kubernetes_endpointslice_name`: The name of endpointslice object.
+* For all targets discovered directly from the endpointslice list (those not additionally inferred
+  from underlying pods), the following labels are attached:
+  * `__meta_kubernetes_endpointslice_address_target_kind`: Kind of the referenced object.
+  * `__meta_kubernetes_endpointslice_address_target_name`: Name of referenced object.
+  * `__meta_kubernetes_endpointslice_address_type`: The ip protocol family of the address of the target.
+  * `__meta_kubernetes_endpointslice_endpoint_conditions_ready`:  Set to `true` or `false` for the referenced endpoint's ready state.
+  * `__meta_kubernetes_endpointslice_endpoint_topology_kubernetes_io_hostname`:  Name of the node hosting the referenced endpoint.
+  * `__meta_kubernetes_endpointslice_endpoint_topology_present_kubernetes_io_hostname`: Flag that shows if the referenced object has a kubernetes.io/hostname annotation.
+  * `__meta_kubernetes_endpointslice_port`: Port of the referenced endpoint.
+  * `__meta_kubernetes_endpointslice_port_name`: Named port of the referenced endpoint.
+  * `__meta_kubernetes_endpointslice_port_protocol`: Protocol of the referenced endpoint.
+* If the endpoints belong to a service, all labels of the `role: service` discovery are attached.
+* For all targets backed by a pod, all labels of the `role: pod` discovery are attached.
+
 #### `ingress`
 
 The `ingress` role discovers a target for each path of each ingress.
@@ -1481,10 +1654,10 @@ See below for the configuration options for Kubernetes discovery:
 [ api_server: <host> ]
 
 # The Kubernetes role of entities that should be discovered.
-# One of endpoints, service, pod, node, or ingress.
+# One of endpoints, endpointslice, service, pod, node, or ingress.
 role: <string>
 
-# Optional path to a kubeconfig file. 
+# Optional path to a kubeconfig file.
 # Note that api_server and kube_config are mutually exclusive.
 [ kubeconfig_file: <filename> ]
 
@@ -1518,7 +1691,7 @@ oauth2:
 [ proxy_url: <string> ]
 
 # Configure whether HTTP requests follow HTTP 3xx redirects.
-[ follow_redirects: <bool> | default = true ]
+[ follow_redirects: <boolean> | default = true ]
 
 # TLS configuration.
 tls_config:
@@ -1526,6 +1699,7 @@ tls_config:
 
 # Optional namespace discovery. If omitted, all namespaces are used.
 namespaces:
+  own_namespace: <boolean>
   names:
     [ - <string> ]
 
@@ -1563,7 +1737,7 @@ inside a Prometheus-enabled mesh.
 
 The following meta labels are available for each target:
 
-* `__meta_kuma_mesh`: the name of the proxy's Mesh 
+* `__meta_kuma_mesh`: the name of the proxy's Mesh
 * `__meta_kuma_dataplane`: the name of the proxy
 * `__meta_kuma_service`: the name of the proxy's associated Service
 * `__meta_kuma_label_<tagname>`: each tag of the proxy
@@ -1615,7 +1789,7 @@ oauth2:
   [ <oauth2> ]
 
 # Configure whether HTTP requests follow HTTP 3xx redirects.
-[ follow_redirects: <bool> | default = true ]
+[ follow_redirects: <boolean> | default = true ]
 ```
 
 The [relabeling phase](#relabel_config) is the preferred and more powerful way
@@ -1703,7 +1877,7 @@ The following meta labels are available on targets during [relabeling](#relabel_
 # Note that `basic_auth` and `authorization` options are
 # mutually exclusive.
 # password and password_file are mutually exclusive.
-# Note: Linode APIv4 Token must be created with scopes: 'linodes:read_only' and 'ips:read_only'
+# Note: Linode APIv4 Token must be created with scopes: 'linodes:read_only', 'ips:read_only', and 'events:read_only'
 
 # Optional HTTP basic authentication information, not currently supported by Linode APIv4.
 basic_auth:
@@ -1731,7 +1905,7 @@ oauth2:
 [ proxy_url: <string> ]
 
 # Configure whether HTTP requests follow HTTP 3xx redirects.
-[ follow_redirects: <bool> | default = true ]
+[ follow_redirects: <boolean> | default = true ]
 
 # TLS configuration.
 tls_config:
@@ -1814,7 +1988,7 @@ oauth2:
   [ <oauth2> ]
 
 # Configure whether HTTP requests follow HTTP 3xx redirects.
-[ follow_redirects: <bool> | default = true ]
+[ follow_redirects: <boolean> | default = true ]
 
 # TLS configuration for connecting to marathon servers
 tls_config:
@@ -2024,7 +2198,7 @@ tls_config:
 [ proxy_url: <string> ]
 
 # Configure whether HTTP requests follow HTTP 3xx redirects.
-[ follow_redirects: <bool> | default = true ]
+[ follow_redirects: <boolean> | default = true ]
 
 # Refresh interval to re-read the app instance list.
 [ refresh_interval: <duration> | default = 30s ]
@@ -2128,7 +2302,7 @@ tags_filter:
 [ refresh_interval: <duration> | default = 60s ]
 
 # Configure whether HTTP requests follow HTTP 3xx redirects.
-[ follow_redirects: <bool> | default = true ]
+[ follow_redirects: <boolean> | default = true ]
 
 # Optional proxy URL.
 [ proxy_url: <string> ]
@@ -2137,6 +2311,79 @@ tags_filter:
 tls_config:
   [ <tls_config> ]
 ```
+
+### `<uyuni_sd_config>`
+
+Uyuni SD configurations allow retrieving scrape targets from managed systems
+via [Uyuni](https://www.uyuni-project.org/) API.
+
+The following meta labels are available on targets during [relabeling](#relabel_config):
+
+* `__meta_uyuni_endpoint_name`: the name of the application endpoint
+* `__meta_uyuni_exporter`: the exporter exposing metrics for the target
+* `__meta_uyuni_groups`: the system groups of the target
+* `__meta_uyuni_metrics_path`: metrics path for the target
+* `__meta_uyuni_minion_hostname`: hostname of the Uyuni client
+* `__meta_uyuni_primary_fqdn`: primary FQDN of the Uyuni client
+* `__meta_uyuni_proxy_module`: the module name if _Exporter Exporter_ proxy is
+  configured for the target
+* `__meta_uyuni_scheme`:  the protocol scheme used for requests
+* `__meta_uyuni_system_id`: the system ID of the client
+
+See below for the configuration options for Uyuni discovery:
+
+```yaml
+# The URL to connect to the Uyuni server.
+server: <string>
+
+# Credentials are used to authenticate the requests to Uyuni API.
+username: <string>
+password: <secret>
+
+# The entitlement string to filter eligible systems.
+[ entitlement: <string> | default = monitoring_entitled ]
+
+# The string by which Uyuni group names are joined into the groups label.
+[ separator: <string> | default = , ]
+
+# Refresh interval to re-read the managed targets list.
+[ refresh_interval: <duration> | default = 60s ]
+
+# Optional HTTP basic authentication information, currently not supported by Uyuni.
+basic_auth:
+  [ username: <string> ]
+    [ password: <secret> ]
+    [ password_file: <string> ]
+
+# Optional `Authorization` header configuration, currently not supported by Uyuni.
+authorization:
+  # Sets the authentication type.
+    [ type: <string> | default: Bearer ]
+    # Sets the credentials. It is mutually exclusive with
+    # `credentials_file`.
+    [ credentials: <secret> ]
+    # Sets the credentials to the credentials read from the configured file.
+    # It is mutually exclusive with `credentials`.
+    [ credentials_file: <filename> ]
+
+# Optional OAuth 2.0 configuration, currently not supported by Uyuni.
+# Cannot be used at the same time as basic_auth or authorization.
+oauth2:
+  [ <oauth2> ]
+
+# Optional proxy URL.
+  [ proxy_url: <string> ]
+
+# Configure whether HTTP requests follow HTTP 3xx redirects.
+  [ follow_redirects: <boolean> | default = true ]
+
+# TLS configuration.
+tls_config:
+  [ <tls_config> ]
+```
+
+See [the Prometheus uyuni-sd configuration file](/documentation/examples/prometheus-uyuni.yml)
+for a practical example on how to set up Uyuni Prometheus configuration.
 
 ### `<static_config>`
 
@@ -2168,6 +2415,9 @@ After relabeling, the `instance` label is set to the value of `__address__` by d
 it was not set during relabeling. The `__scheme__` and `__metrics_path__` labels
 are set to the scheme and metrics path of the target respectively. The `__param_<name>`
 label is set to the value of the first passed URL parameter called `<name>`.
+
+The `__scrape_interval__` and `__scrape_timeout__` labels are set to the target's
+interval and timeout. This is **experimental** and could change in the future.
 
 Additional labels prefixed with `__meta_` may be available during the
 relabeling phase. They are set by the service discovery mechanism that provided
@@ -2307,7 +2557,7 @@ tls_config:
 [ proxy_url: <string> ]
 
 # Configure whether HTTP requests follow HTTP 3xx redirects.
-[ follow_redirects: <bool> | default = true ]
+[ follow_redirects: <boolean> | default = true ]
 
 # List of Azure service discovery configurations.
 azure_sd_configs:
@@ -2381,6 +2631,10 @@ nerve_sd_configs:
 openstack_sd_configs:
   [ - <openstack_sd_config> ... ]
 
+# List of PuppetDB service discovery configurations.
+puppetdb_sd_configs:
+  [ - <puppetdb_sd_config> ... ]
+
 # List of Scaleway service discovery configurations.
 scaleway_sd_configs:
   [ - <scaleway_sd_config> ... ]
@@ -2393,6 +2647,10 @@ serverset_sd_configs:
 triton_sd_configs:
   [ - <triton_sd_config> ... ]
 
+# List of Uyuni service discovery configurations.
+uyuni_sd_configs:
+  [ - <uyuni_sd_config> ... ]
+
 # List of labeled statically configured Alertmanagers.
 static_configs:
   [ - <static_config> ... ]
@@ -2400,6 +2658,28 @@ static_configs:
 # List of Alertmanager relabel configurations.
 relabel_configs:
   [ - <relabel_config> ... ]
+```
+
+### `<tracing_config>`
+
+`tracing_config` configures exporting traces from Prometheus to a tracing backend via the OTLP protocol. Tracing is currently an **experimental** feature and could change in the future.
+
+```yaml
+# Client used to export the traces. Options are 'http' or 'grpc'.
+[ client_type: <string> | default = grpc ]
+
+# Endpoint to send the traces to.
+[ endpoint: <string> ]
+
+# Sets the probability a given trace will be sampled. Must be a float from 0 through 1.
+[ sampling_fraction: <float> | default = 0 ]
+
+# If disabled, the client will use a secure connection.
+[ insecure: <boolean> | default = true ]
+
+# TLS configuration.
+tls_config:
+  [ <tls_config> ]
 ```
 
 ### `<remote_write>`
@@ -2486,7 +2766,7 @@ tls_config:
 [ proxy_url: <string> ]
 
 # Configure whether HTTP requests follow HTTP 3xx redirects.
-[ follow_redirects: <bool> | default = true ]
+[ follow_redirects: <boolean> | default = true ]
 
 # Configures the queue used to write to remote storage.
 queue_config:
@@ -2506,7 +2786,7 @@ queue_config:
   # Initial retry delay. Gets doubled for every retry.
   [ min_backoff: <duration> | default = 30ms ]
   # Maximum retry delay.
-  [ max_backoff: <duration> | default = 100ms ]
+  [ max_backoff: <duration> | default = 5s ]
   # Retry upon receiving a 429 status code from the remote-write storage.
   # This is experimental and might change in the future.
   [ retry_on_http_429: <boolean> | default = false ]
@@ -2587,9 +2867,18 @@ tls_config:
 [ proxy_url: <string> ]
 
 # Configure whether HTTP requests follow HTTP 3xx redirects.
-[ follow_redirects: <bool> | default = true ]
+[ follow_redirects: <boolean> | default = true ]
 ```
 
 There is a list of
 [integrations](https://prometheus.io/docs/operating/integrations/#remote-endpoints-and-storage)
 with this feature.
+
+### `<exemplars>`
+
+Note that exemplar storage is still considered experimental and must be enabled via `--enable-feature=exemplar-storage`.
+
+```yaml
+# Configures the maximum size of the circular buffer used to store exemplars for all series. Resizable during runtime.
+[ max_exemplars: <int> | default = 100000 ]
+```

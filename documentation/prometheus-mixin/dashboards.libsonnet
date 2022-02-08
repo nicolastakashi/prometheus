@@ -13,8 +13,8 @@ local template = grafana.template;
       g.dashboard(
         '%(prefix)sOverview' % $._config.grafanaPrometheus
       )
-      .addMultiTemplate('job', 'prometheus_build_info', 'job')
-      .addMultiTemplate('instance', 'prometheus_build_info', 'instance')
+      .addMultiTemplate('job', 'prometheus_build_info{%(prometheusSelector)s}' % $._config, 'job')
+      .addMultiTemplate('instance', 'prometheus_build_info{job=~"$job"}', 'instance')
       .addRow(
         g.row('Prometheus Stats')
         .addPanel(
@@ -312,9 +312,9 @@ local template = grafana.template;
       )
       .addTemplate(
         template.new(
-          'instance',
+          'cluster',
           '$datasource',
-          'label_values(prometheus_build_info, instance)' % $._config,
+          'label_values(kube_pod_container_info{image=~".*prometheus.*"}, cluster)' % $._config,
           refresh='time',
           current={
             selected: true,
@@ -326,9 +326,9 @@ local template = grafana.template;
       )
       .addTemplate(
         template.new(
-          'cluster',
+          'instance',
           '$datasource',
-          'label_values(kube_pod_container_info{image=~".*prometheus.*"}, cluster)' % $._config,
+          'label_values(prometheus_build_info{cluster=~"$cluster"}, instance)' % $._config,
           refresh='time',
           current={
             selected: true,

@@ -39,10 +39,10 @@ import (
 	"github.com/prometheus/common/route"
 
 	"github.com/prometheus/prometheus/config"
-	"github.com/prometheus/prometheus/pkg/exemplar"
-	"github.com/prometheus/prometheus/pkg/labels"
-	"github.com/prometheus/prometheus/pkg/textparse"
-	"github.com/prometheus/prometheus/pkg/timestamp"
+	"github.com/prometheus/prometheus/model/exemplar"
+	"github.com/prometheus/prometheus/model/labels"
+	"github.com/prometheus/prometheus/model/textparse"
+	"github.com/prometheus/prometheus/model/timestamp"
 	"github.com/prometheus/prometheus/promql"
 	"github.com/prometheus/prometheus/promql/parser"
 	"github.com/prometheus/prometheus/rules"
@@ -75,9 +75,7 @@ const (
 	errorNotFound    errorType = "not_found"
 )
 
-var (
-	LocalhostRepresentations = []string{"127.0.0.1", "localhost", "::1"}
-)
+var LocalhostRepresentations = []string{"127.0.0.1", "localhost", "::1"}
 
 type apiError struct {
 	typ errorType
@@ -157,11 +155,18 @@ type TSDBAdminStats interface {
 	WALReplayStatus() (tsdb.WALReplayStatus, error)
 }
 
+// QueryEngine defines the interface for the *promql.Engine, so it can be replaced, wrapped or mocked.
+type QueryEngine interface {
+	SetQueryLogger(l promql.QueryLogger)
+	NewInstantQuery(q storage.Queryable, qs string, ts time.Time) (promql.Query, error)
+	NewRangeQuery(q storage.Queryable, qs string, start, end time.Time, interval time.Duration) (promql.Query, error)
+}
+
 // API can register a set of endpoints in a router and handle
 // them using the provided storage and query engine.
 type API struct {
 	Queryable         storage.SampleAndChunkQueryable
-	QueryEngine       *promql.Engine
+	QueryEngine       QueryEngine
 	ExemplarQueryable storage.ExemplarQueryable
 
 	targetRetriever       func(context.Context) TargetRetriever
@@ -181,6 +186,7 @@ type API struct {
 	buildInfo   *PrometheusVersion
 	runtimeInfo func() (RuntimeInfo, error)
 	gatherer    prometheus.Gatherer
+	isAgent     bool
 
 	remoteWriteHandler http.Handler
 	remoteReadHandler  http.Handler
@@ -193,7 +199,7 @@ func init() {
 
 // NewAPI returns an initialized API type.
 func NewAPI(
-	qe *promql.Engine,
+	qe QueryEngine,
 	q storage.SampleAndChunkQueryable,
 	ap storage.Appendable,
 	eq storage.ExemplarQueryable,
@@ -211,6 +217,7 @@ func NewAPI(
 	remoteReadSampleLimit int,
 	remoteReadConcurrencyLimit int,
 	remoteReadMaxBytesInFrame int,
+	isAgent bool,
 	CORSOrigin *regexp.Regexp,
 	runtimeInfo func() (RuntimeInfo, error),
 	buildInfo *PrometheusVersion,
@@ -239,6 +246,7 @@ func NewAPI(
 		runtimeInfo:      runtimeInfo,
 		buildInfo:        buildInfo,
 		gatherer:         gatherer,
+		isAgent:          isAgent,
 
 		remoteReadHandler: remote.NewReadHandler(logger, registerer, q, configFunc, remoteReadSampleLimit, remoteReadConcurrencyLimit, remoteReadMaxBytesInFrame),
 	}
@@ -282,26 +290,35 @@ func (api *API) Register(r *route.Router) {
 		}.ServeHTTP)
 	}
 
+	wrapAgent := func(f apiFunc) http.HandlerFunc {
+		return wrap(func(r *http.Request) apiFuncResult {
+			if api.isAgent {
+				return apiFuncResult{nil, &apiError{errorExec, errors.New("unavailable with Prometheus Agent")}, nil, nil}
+			}
+			return f(r)
+		})
+	}
+
 	r.Options("/*path", wrap(api.options))
 
-	r.Get("/query", wrap(api.query))
-	r.Post("/query", wrap(api.query))
-	r.Get("/query_range", wrap(api.queryRange))
-	r.Post("/query_range", wrap(api.queryRange))
-	r.Get("/query_exemplars", wrap(api.queryExemplars))
-	r.Post("/query_exemplars", wrap(api.queryExemplars))
+	r.Get("/query", wrapAgent(api.query))
+	r.Post("/query", wrapAgent(api.query))
+	r.Get("/query_range", wrapAgent(api.queryRange))
+	r.Post("/query_range", wrapAgent(api.queryRange))
+	r.Get("/query_exemplars", wrapAgent(api.queryExemplars))
+	r.Post("/query_exemplars", wrapAgent(api.queryExemplars))
 
-	r.Get("/labels", wrap(api.labelNames))
-	r.Post("/labels", wrap(api.labelNames))
-	r.Get("/label/:name/values", wrap(api.labelValues))
+	r.Get("/labels", wrapAgent(api.labelNames))
+	r.Post("/labels", wrapAgent(api.labelNames))
+	r.Get("/label/:name/values", wrapAgent(api.labelValues))
 
-	r.Get("/series", wrap(api.series))
-	r.Post("/series", wrap(api.series))
-	r.Del("/series", wrap(api.dropSeries))
+	r.Get("/series", wrapAgent(api.series))
+	r.Post("/series", wrapAgent(api.series))
+	r.Del("/series", wrapAgent(api.dropSeries))
 
 	r.Get("/targets", wrap(api.targets))
 	r.Get("/targets/metadata", wrap(api.targetMetadata))
-	r.Get("/alertmanagers", wrap(api.alertmanagers))
+	r.Get("/alertmanagers", wrapAgent(api.alertmanagers))
 
 	r.Get("/metadata", wrap(api.metricMetadata))
 
@@ -309,22 +326,22 @@ func (api *API) Register(r *route.Router) {
 	r.Get("/status/runtimeinfo", wrap(api.serveRuntimeInfo))
 	r.Get("/status/buildinfo", wrap(api.serveBuildInfo))
 	r.Get("/status/flags", wrap(api.serveFlags))
-	r.Get("/status/tsdb", wrap(api.serveTSDBStatus))
+	r.Get("/status/tsdb", wrapAgent(api.serveTSDBStatus))
 	r.Get("/status/walreplay", api.serveWALReplayStatus)
-	r.Post("/read", api.ready(http.HandlerFunc(api.remoteRead)))
-	r.Post("/write", api.ready(http.HandlerFunc(api.remoteWrite)))
+	r.Post("/read", api.ready(api.remoteRead))
+	r.Post("/write", api.ready(api.remoteWrite))
 
-	r.Get("/alerts", wrap(api.alerts))
-	r.Get("/rules", wrap(api.rules))
+	r.Get("/alerts", wrapAgent(api.alerts))
+	r.Get("/rules", wrapAgent(api.rules))
 
 	// Admin APIs
-	r.Post("/admin/tsdb/delete_series", wrap(api.deleteSeries))
-	r.Post("/admin/tsdb/clean_tombstones", wrap(api.cleanTombstones))
-	r.Post("/admin/tsdb/snapshot", wrap(api.snapshot))
+	r.Post("/admin/tsdb/delete_series", wrapAgent(api.deleteSeries))
+	r.Post("/admin/tsdb/clean_tombstones", wrapAgent(api.cleanTombstones))
+	r.Post("/admin/tsdb/snapshot", wrapAgent(api.snapshot))
 
-	r.Put("/admin/tsdb/delete_series", wrap(api.deleteSeries))
-	r.Put("/admin/tsdb/clean_tombstones", wrap(api.cleanTombstones))
-	r.Put("/admin/tsdb/snapshot", wrap(api.snapshot))
+	r.Put("/admin/tsdb/delete_series", wrapAgent(api.deleteSeries))
+	r.Put("/admin/tsdb/clean_tombstones", wrapAgent(api.cleanTombstones))
+	r.Put("/admin/tsdb/snapshot", wrapAgent(api.snapshot))
 }
 
 type queryData struct {
@@ -361,11 +378,6 @@ func (api *API) query(r *http.Request) (result apiFuncResult) {
 	}
 
 	qry, err := api.QueryEngine.NewInstantQuery(api.Queryable, r.FormValue("query"), ts)
-	if err == promql.ErrValidationAtModifierDisabled {
-		err = errors.New("@ modifier is disabled, use --enable-feature=promql-at-modifier to enable it")
-	} else if err == promql.ErrValidationNegativeOffsetDisabled {
-		err = errors.New("negative offset is disabled, use --enable-feature=promql-negative-offset to enable it")
-	}
 	if err != nil {
 		return invalidParamError(err, "query")
 	}
@@ -441,11 +453,6 @@ func (api *API) queryRange(r *http.Request) (result apiFuncResult) {
 	}
 
 	qry, err := api.QueryEngine.NewRangeQuery(api.Queryable, r.FormValue("query"), start, end, step)
-	if err == promql.ErrValidationAtModifierDisabled {
-		err = errors.New("@ modifier is disabled, use --enable-feature=promql-at-modifier to enable it")
-	} else if err == promql.ErrValidationNegativeOffsetDisabled {
-		err = errors.New("negative offset is disabled, use --enable-feature=promql-negative-offset to enable it")
-	}
 	if err != nil {
 		return apiFuncResult{nil, &apiError{errorBadData, err}, nil, nil}
 	}
@@ -760,6 +767,9 @@ type Target struct {
 	LastScrape         time.Time           `json:"lastScrape"`
 	LastScrapeDuration float64             `json:"lastScrapeDuration"`
 	Health             scrape.TargetHealth `json:"health"`
+
+	ScrapeInterval string `json:"scrapeInterval"`
+	ScrapeTimeout  string `json:"scrapeTimeout"`
 }
 
 // DroppedTarget has the information for one target that was dropped during relabelling.
@@ -899,6 +909,8 @@ func (api *API) targets(r *http.Request) apiFuncResult {
 					LastScrape:         target.LastScrape(),
 					LastScrapeDuration: target.LastScrapeDuration().Seconds(),
 					Health:             target.Health(),
+					ScrapeInterval:     target.GetValue(model.ScrapeIntervalLabel),
+					ScrapeTimeout:      target.GetValue(model.ScrapeTimeoutLabel),
 				})
 			}
 		}
@@ -1140,15 +1152,16 @@ type RuleGroup struct {
 	// In order to preserve rule ordering, while exposing type (alerting or recording)
 	// specific properties, both alerting and recording rules are exposed in the
 	// same array.
-	Rules          []rule    `json:"rules"`
+	Rules          []Rule    `json:"rules"`
 	Interval       float64   `json:"interval"`
+	Limit          int       `json:"limit"`
 	EvaluationTime float64   `json:"evaluationTime"`
 	LastEvaluation time.Time `json:"lastEvaluation"`
 }
 
-type rule interface{}
+type Rule interface{}
 
-type alertingRule struct {
+type AlertingRule struct {
 	// State can be "pending", "firing", "inactive".
 	State          string           `json:"state"`
 	Name           string           `json:"name"`
@@ -1165,7 +1178,7 @@ type alertingRule struct {
 	Type string `json:"type"`
 }
 
-type recordingRule struct {
+type RecordingRule struct {
 	Name           string           `json:"name"`
 	Query          string           `json:"query"`
 	Labels         labels.Labels    `json:"labels,omitempty"`
@@ -1194,12 +1207,13 @@ func (api *API) rules(r *http.Request) apiFuncResult {
 			Name:           grp.Name(),
 			File:           grp.File(),
 			Interval:       grp.Interval().Seconds(),
-			Rules:          []rule{},
+			Limit:          grp.Limit(),
+			Rules:          []Rule{},
 			EvaluationTime: grp.GetEvaluationTime().Seconds(),
 			LastEvaluation: grp.GetLastEvaluation(),
 		}
 		for _, r := range grp.Rules() {
-			var enrichedRule rule
+			var enrichedRule Rule
 
 			lastError := ""
 			if r.LastError() != nil {
@@ -1210,7 +1224,7 @@ func (api *API) rules(r *http.Request) apiFuncResult {
 				if !returnAlerts {
 					break
 				}
-				enrichedRule = alertingRule{
+				enrichedRule = AlertingRule{
 					State:          rule.State().String(),
 					Name:           rule.Name(),
 					Query:          rule.Query().String(),
@@ -1228,7 +1242,7 @@ func (api *API) rules(r *http.Request) apiFuncResult {
 				if !returnRecording {
 					break
 				}
-				enrichedRule = recordingRule{
+				enrichedRule = RecordingRule{
 					Name:           rule.Name(),
 					Query:          rule.Query().String(),
 					Labels:         rule.Labels(),
@@ -1436,7 +1450,7 @@ func (api *API) snapshot(r *http.Request) apiFuncResult {
 			rand.Int63())
 		dir = filepath.Join(snapdir, name)
 	)
-	if err := os.MkdirAll(dir, 0777); err != nil {
+	if err := os.MkdirAll(dir, 0o777); err != nil {
 		return apiFuncResult{nil, &apiError{errorInternal, errors.Wrap(err, "create snapshot directory")}, nil, nil}
 	}
 	if err := api.db.Snapshot(dir, !skipHead); err != nil {
@@ -1492,7 +1506,6 @@ func (api *API) respondError(w http.ResponseWriter, apiErr *apiError, data inter
 		Error:     apiErr.err.Error(),
 		Data:      data,
 	})
-
 	if err != nil {
 		level.Error(api.logger).Log("msg", "error marshaling json response", "err", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1635,7 +1648,7 @@ func marshalExemplarJSON(ptr unsafe.Pointer, stream *jsoniter.Stream) {
 	stream.WriteMore()
 	stream.WriteObjectField(`timestamp`)
 	marshalTimestamp(p.Ts, stream)
-	//marshalTimestamp(p.Ts, stream)
+	// marshalTimestamp(p.Ts, stream)
 
 	stream.WriteObjectEnd()
 }

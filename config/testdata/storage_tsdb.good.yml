@@ -1,0 +1,6 @@
+storage:
+  tsdb:
+    allow_overlapping_blocks: true
+    retention:
+      time: 24h
+      size: 5GB

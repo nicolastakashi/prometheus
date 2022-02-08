@@ -24,15 +24,16 @@ import (
 
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
-	opentracing "github.com/opentracing/opentracing-go"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/model"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 
-	"github.com/prometheus/prometheus/pkg/labels"
-	"github.com/prometheus/prometheus/pkg/rulefmt"
-	"github.com/prometheus/prometheus/pkg/timestamp"
-	"github.com/prometheus/prometheus/pkg/value"
+	"github.com/prometheus/prometheus/model/labels"
+	"github.com/prometheus/prometheus/model/rulefmt"
+	"github.com/prometheus/prometheus/model/timestamp"
+	"github.com/prometheus/prometheus/model/value"
 	"github.com/prometheus/prometheus/promql"
 	"github.com/prometheus/prometheus/promql/parser"
 	"github.com/prometheus/prometheus/storage"
@@ -213,7 +214,7 @@ type Rule interface {
 	// Labels of the rule.
 	Labels() labels.Labels
 	// eval evaluates the rule, including any associated recording or alerting actions.
-	Eval(context.Context, time.Time, QueryFunc, *url.URL) (promql.Vector, error)
+	Eval(context.Context, time.Time, QueryFunc, *url.URL, int) (promql.Vector, error)
 	// String returns a human-readable string representation of the rule.
 	String() string
 	// Query returns the rule query expression.
@@ -244,6 +245,7 @@ type Group struct {
 	name                 string
 	file                 string
 	interval             time.Duration
+	limit                int
 	rules                []Rule
 	seriesInPreviousEval []map[string]labels.Labels // One per Rule.
 	staleSeries          []labels.Labels
@@ -267,6 +269,7 @@ type Group struct {
 type GroupOptions struct {
 	Name, File    string
 	Interval      time.Duration
+	Limit         int
 	Rules         []Rule
 	ShouldRestore bool
 	Opts          *ManagerOptions
@@ -295,6 +298,7 @@ func NewGroup(o GroupOptions) *Group {
 		name:                 o.Name,
 		file:                 o.File,
 		interval:             o.Interval,
+		limit:                o.Limit,
 		rules:                o.Rules,
 		shouldRestore:        o.ShouldRestore,
 		opts:                 o.Opts,
@@ -318,6 +322,9 @@ func (g *Group) Rules() []Rule { return g.rules }
 
 // Interval returns the group's interval.
 func (g *Group) Interval() time.Duration { return g.interval }
+
+// Limit returns the group's limit.
+func (g *Group) Limit() int { return g.limit }
 
 func (g *Group) run(ctx context.Context) {
 	defer close(g.terminated)
@@ -578,10 +585,10 @@ func (g *Group) Eval(ctx context.Context, ts time.Time) {
 		}
 
 		func(i int, rule Rule) {
-			sp, ctx := opentracing.StartSpanFromContext(ctx, "rule")
-			sp.SetTag("name", rule.Name())
+			ctx, sp := otel.Tracer("").Start(ctx, "rule")
+			sp.SetAttributes(attribute.String("name", rule.Name()))
 			defer func(t time.Time) {
-				sp.Finish()
+				sp.End()
 
 				since := time.Since(t)
 				g.metrics.EvalDuration.Observe(since.Seconds())
@@ -591,7 +598,7 @@ func (g *Group) Eval(ctx context.Context, ts time.Time) {
 
 			g.metrics.EvalTotal.WithLabelValues(GroupKey(g.File(), g.Name())).Inc()
 
-			vector, err := rule.Eval(ctx, ts, g.opts.QueryFunc, g.opts.ExternalURL)
+			vector, err := rule.Eval(ctx, ts, g.opts.QueryFunc, g.opts.ExternalURL, g.Limit())
 			if err != nil {
 				rule.SetHealth(HealthBad)
 				rule.SetLastError(err)
@@ -604,6 +611,8 @@ func (g *Group) Eval(ctx context.Context, ts time.Time) {
 				}
 				return
 			}
+			rule.SetHealth(HealthGood)
+			rule.SetLastError(nil)
 			samplesTotal += float64(len(vector))
 
 			if ar, ok := rule.(*AlertingRule); ok {
@@ -644,7 +653,8 @@ func (g *Group) Eval(ctx context.Context, ts time.Time) {
 						level.Warn(g.logger).Log("msg", "Rule evaluation result discarded", "err", err, "sample", s)
 					}
 				} else {
-					seriesReturned[s.Metric.String()] = s.Metric
+					buf := [1024]byte{}
+					seriesReturned[string(s.Metric.Bytes(buf[:]))] = s.Metric
 				}
 			}
 			if numOutOfOrder > 0 {
@@ -664,7 +674,7 @@ func (g *Group) Eval(ctx context.Context, ts time.Time) {
 						// Do not count these in logging, as this is expected if series
 						// is exposed from a different rule.
 					default:
-						level.Warn(g.logger).Log("msg", "Adding stale sample failed", "sample", metric, "err", err)
+						level.Warn(g.logger).Log("msg", "Adding stale sample failed", "sample", lset.String(), "err", err)
 					}
 				}
 			}
@@ -826,12 +836,10 @@ func (g *Group) RestoreForState(ts time.Time) {
 			level.Debug(g.logger).Log("msg", "'for' state restored",
 				labels.AlertName, alertRule.Name(), "restored_time", a.ActiveAt.Format(time.RFC850),
 				"labels", a.Labels.String())
-
 		})
 
 		alertRule.SetRestored(true)
 	}
-
 }
 
 // Equals return if two groups are the same.
@@ -845,6 +853,10 @@ func (g *Group) Equals(ng *Group) bool {
 	}
 
 	if g.interval != ng.interval {
+		return false
+	}
+
+	if g.limit != ng.limit {
 		return false
 	}
 
@@ -1084,6 +1096,7 @@ func (m *Manager) LoadGroups(
 				Name:          rg.Name,
 				File:          fn,
 				Interval:      itv,
+				Limit:         rg.Limit,
 				Rules:         rules,
 				ShouldRestore: shouldRestore,
 				Opts:          m.opts,
