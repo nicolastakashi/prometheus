@@ -46,11 +46,7 @@ Enable with `--enable-feature=agent`.
 
 Learn more about the Prometheus Agent in our [blog post](https://prometheus.io/blog/2021/11/16/agent/).
 
-<<<<<<< HEAD
-* [CHANGE] remote-write: Change default max retry time from 100ms to 5 seconds. #9634
-=======
 * [CHANGE] Remote-write: Change default max retry time from 100ms to 5 seconds. #9634
->>>>>>> 277bf93952b56227cb750a8129197efa489eddde
 * [FEATURE] Agent: New mode of operation optimized for remote-write only scenarios, without local storage. Enable with `--enable-feature=agent`. #8785 #9851 #9664 #9939 #9941 #9943
 * [FEATURE] Promtool: Add `promtool check service-discovery` command. #8970
 * [FEATURE] UI: Add search in metrics dropdown. #9629
