@@ -62,8 +62,8 @@ require (
 	github.com/shurcooL/httpfs v0.0.0-20230704072500-f1e31cf0ba5c
 	github.com/stretchr/testify v1.9.0
 	github.com/vultr/govultr/v2 v2.17.2
-	go.opentelemetry.io/collector/pdata v1.16.0
-	go.opentelemetry.io/collector/semconv v0.110.0
+	go.opentelemetry.io/collector/pdata v1.17.0
+	go.opentelemetry.io/collector/semconv v0.111.0
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.55.0
 	go.opentelemetry.io/otel v1.30.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.30.0
@@ -83,7 +83,7 @@ require (
 	golang.org/x/tools v0.24.0
 	google.golang.org/api v0.199.0
 	google.golang.org/genproto/googleapis/api v0.0.0-20240903143218-8af14fe29dc1
-	google.golang.org/grpc v1.67.0
+	google.golang.org/grpc v1.67.1
 	google.golang.org/protobuf v1.34.2
 	gopkg.in/yaml.v2 v2.4.0
 	gopkg.in/yaml.v3 v3.0.1
