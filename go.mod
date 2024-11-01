@@ -36,7 +36,7 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway v1.16.0
 	github.com/hashicorp/consul/api v1.29.4
 	github.com/hashicorp/nomad/api v0.0.0-20240717122358-3d93bd3778f3
-	github.com/hetznercloud/hcloud-go/v2 v2.13.1
+	github.com/hetznercloud/hcloud-go/v2 v2.15.0
 	github.com/ionos-cloud/sdk-go/v6 v6.2.1
 	github.com/json-iterator/go v1.1.12
 	github.com/klauspost/compress v1.17.10
@@ -50,7 +50,7 @@ require (
 	github.com/oklog/ulid v1.3.1
 	github.com/ovh/go-ovh v1.6.0
 	github.com/prometheus/alertmanager v0.27.0
-	github.com/prometheus/client_golang v1.20.4
+	github.com/prometheus/client_golang v1.20.5
 	github.com/prometheus/client_model v0.6.1
 	github.com/prometheus/common v0.60.0
 	github.com/prometheus/common/assets v0.2.0
