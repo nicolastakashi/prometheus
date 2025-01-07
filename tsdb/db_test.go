@@ -1144,7 +1144,7 @@ func testWALReplayRaceOnSamplesLoggedBeforeSeries(t *testing.T, numSamplesBefore
 	require.NoError(t, db.Close())
 
 	// Reopen the DB, replaying the WAL.
-	reopenDB, err := Open(db.Dir(), promslog.New(&promslog.Config{}), nil, nil, nil)
+	reopenDB, err := Open(db.Dir(), promslog.New(&promslog.Config{}), nil, db.opts, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, reopenDB.Close())
