@@ -81,7 +81,7 @@ require (
 	golang.org/x/tools v0.28.0
 	google.golang.org/api v0.213.0
 	google.golang.org/genproto/googleapis/api v0.0.0-20241216192217-9240e9c98484
-	google.golang.org/grpc v1.69.0
+	google.golang.org/grpc v1.70.0
 	google.golang.org/protobuf v1.36.0
 	gopkg.in/yaml.v2 v2.4.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -130,7 +130,7 @@ require (
 	github.com/go-resty/resty/v2 v2.15.3 // indirect
 	github.com/godbus/dbus/v5 v5.0.4 // indirect
 	github.com/golang-jwt/jwt/v5 v5.2.1 // indirect
-	github.com/golang/glog v1.2.2 // indirect
+	github.com/golang/glog v1.2.3 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/gnostic-models v0.6.8 // indirect
 	github.com/google/go-querystring v1.1.0 // indirect
