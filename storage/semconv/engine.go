@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"path"
 	"slices"
 	"strings"
 
@@ -45,6 +46,148 @@ func newSchemaEngine(registry registrySource) *schemaEngine {
 		otelSchemaCache: newStaticCache[otelSchema](),
 		semconvCache:    newStaticCache[semconv](),
 	}
+}
+
+// metricLookup resolves what a semconv version declares for a metric name.
+// declared reports whether that version declares the name as a metric at all;
+// known reports whether the version's semconv could be consulted in the first
+// place. A registry is not obliged to ship a semconv file for every version its
+// schema references (see validateRegistryFiles), so known=false means "cannot
+// verify" and must never be read as a contradiction.
+type metricLookup func(version, name string) (def metricDef, declared, known bool)
+
+// metricLookup returns a metricLookup that resolves sibling semconv versions
+// from the same registry directory as semconvURL, e.g. registry/1.0.0 for
+// version 1.0.0 when semconvURL is registry/1.1.0.
+//
+// This is where validating rename edges costs more than the current name-only
+// traversal: answering one query can now touch a semconv file per version in
+// the metric's rename chain rather than the anchor version alone. The per-call
+// memo below collapses repeat lookups within a single query, and getSemconv's
+// process-wide cache means each file is parsed at most once for the lifetime of
+// the process, so the steady-state cost is the resident size of the versions
+// actually queried rather than per-query I/O. It is still a real increase in
+// the resolver's footprint, from the anchor version to O(versions in chain).
+func (e *schemaEngine) metricLookup(semconvURL string) metricLookup {
+	dir, _ := path.Split(semconvURL)
+	// memo distinguishes "loaded" from "tried and failed" so an absent semconv
+	// is not re-fetched for every hop that consults it.
+	memo := map[string]*semconv{}
+	return func(version, name string) (metricDef, bool, bool) {
+		sc, tried := memo[version]
+		if !tried {
+			if loaded, err := e.getSemconv(dir + version); err == nil {
+				sc = &loaded
+			}
+			memo[version] = sc
+		}
+		if sc == nil {
+			return metricDef{}, false, false
+		}
+		def, declared := sc.metrics[name]
+		return def, declared, true
+	}
+}
+
+// renameValidator corroborates the schema's metric rename edges against the
+// semconv files of the versions they connect.
+//
+// The OTel schema format names metrics only by their surface name, so the rename
+// graph alone cannot distinguish a genuine rename of one metric from an edge
+// that happens to join two unrelated metrics sharing a name at different
+// versions. The semconv files can: each version states the unit and instrument
+// of the metric it declares under that name, and upstream semantic conventions
+// forbid a stable metric from changing either (policies/compatibility.rego). A
+// disagreement across an edge therefore means the two names denote different
+// metrics.
+//
+// A group's id is of no use here even though it looks like a stable identifier:
+// upstream lints it to be exactly "metric.<metric_name>"
+// (policies/yaml_schema.rego), so it is renamed in lockstep with the metric and
+// comparing ids across an edge only restates whether the name changed.
+type renameValidator struct {
+	schema *otelSchema
+	lookup metricLookup
+
+	warnings []string
+	seen     map[string]struct{}
+}
+
+func newRenameValidator(schema *otelSchema, lookup metricLookup) *renameValidator {
+	return &renameValidator{schema: schema, lookup: lookup, seen: map[string]struct{}{}}
+}
+
+func (rv *renameValidator) warn(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	if _, dup := rv.seen[msg]; dup {
+		return
+	}
+	rv.seen[msg] = struct{}{}
+	rv.warnings = append(rv.warnings, msg)
+}
+
+// allowEdge reports whether the walk may traverse version r's renames starting
+// from metric name from. A nil validator allows everything, which is the
+// behaviour when no semconv is available to check against.
+//
+// It rejects an edge only on positive contradiction — both endpoints declared,
+// but with a different unit or instrument — because fusing metrics measured in
+// different units yields numerically meaningless results, which is worse than
+// returning less data. Every other suspicious case is reported and still
+// traversed: a name missing from a version's semconv is a strong hint of a
+// mis-authored edge, but a registry may legitimately ship a semconv trimmed to
+// the metrics its operator cares about, and dropping variants over that would
+// lose real series.
+func (rv *renameValidator) allowEdge(r versionRenames, from string) bool {
+	if rv == nil {
+		return true
+	}
+	older, newer, ok := r.renameDirection(from)
+	if !ok {
+		// An attribute-only hop renames no metric, so there is no metric
+		// identity to corroborate.
+		return true
+	}
+	predecessor, hasPredecessor := rv.schema.predecessorOf(r.version)
+	if !hasPredecessor {
+		// The rename is recorded at the schema's earliest version, so the
+		// version the older name belonged to is outside the schema's history.
+		return true
+	}
+
+	oldDef, oldDeclared, oldKnown := rv.lookup(predecessor, older)
+	newDef, newDeclared, newKnown := rv.lookup(r.version, newer)
+	if !oldKnown || !newKnown {
+		return true
+	}
+
+	switch {
+	case !oldDeclared && !newDeclared:
+		rv.warn("schema version %s renames %q to %q but neither name is declared as a metric by semconv %s or %s; the rename could not be corroborated",
+			r.version, older, newer, predecessor, r.version)
+	case !oldDeclared:
+		rv.warn("schema version %s renames %q to %q but semconv %s does not declare %q as a metric; the rename could not be corroborated",
+			r.version, older, newer, predecessor, older)
+	case !newDeclared:
+		rv.warn("schema version %s renames %q to %q but semconv %s does not declare %q as a metric; the rename could not be corroborated",
+			r.version, older, newer, r.version, newer)
+	case !oldDef.sameMetricAs(newDef):
+		rv.warn("schema version %s renames %q to %q but semconv %s declares %q as %s/%s while semconv %s declares %q as %s/%s; treating them as different metrics and not merging their series",
+			r.version, older, newer,
+			predecessor, older, describeUnit(oldDef.unit), describeUnit(oldDef.instrument),
+			r.version, newer, describeUnit(newDef.unit), describeUnit(newDef.instrument))
+		return false
+	}
+	return true
+}
+
+// describeUnit renders a unit or instrument for a warning message, naming an
+// undeclared one rather than rendering it as an empty string.
+func describeUnit(s string) string {
+	if s == "" {
+		return "(unspecified)"
+	}
+	return s
 }
 
 func extractMetricName(matchers []*labels.Matcher) (string, error) {
@@ -78,7 +221,10 @@ func findVersionAnchorIndex(versions []versionRenames, targetVersion string) int
 // For each version, applies both metric and attribute renames together.
 // Walks backward through versions <= version to find older name variants,
 // and forward through versions > version to find newer name variants.
-func generateMatcherVariants(version string, schema *otelSchema, matchers []*labels.Matcher) [][]*labels.Matcher {
+// rv corroborates each metric rename against the semconv files of the versions
+// it connects; a nil rv skips that check and traverses the graph on name
+// matching alone.
+func generateMatcherVariants(version string, schema *otelSchema, matchers []*labels.Matcher, rv *renameValidator) [][]*labels.Matcher {
 	if len(schema.versionRenames) == 0 {
 		return [][]*labels.Matcher{matchers}
 	}
@@ -88,10 +234,10 @@ func generateMatcherVariants(version string, schema *otelSchema, matchers []*lab
 	anchorIdx := findVersionAnchorIndex(schema.versionRenames, version)
 
 	// Backward for older names.
-	variants = walkVersions(schema.versionRenames[:anchorIdx+1], matchers, seen, variants, true)
+	variants = walkVersions(schema.versionRenames[:anchorIdx+1], matchers, seen, variants, true, rv)
 
 	// Forward for newer names.
-	variants = walkVersions(schema.versionRenames[anchorIdx+1:], matchers, seen, variants, false)
+	variants = walkVersions(schema.versionRenames[anchorIdx+1:], matchers, seen, variants, false, rv)
 
 	return variants
 }
@@ -104,6 +250,7 @@ func walkVersions(
 	seen map[string]struct{},
 	result [][]*labels.Matcher,
 	reverse bool,
+	rv *renameValidator,
 ) [][]*labels.Matcher {
 	current := matchers
 	for {
@@ -116,6 +263,13 @@ func walkVersions(
 		}
 
 		for _, v := range versionsIter {
+			currentName, err := extractMetricName(current)
+			if err == nil && !rv.allowEdge(v, currentName) {
+				// The semconv files contradict this rename, so the walk must
+				// not chain through it either: anything reachable only via a
+				// mis-linked edge belongs to a different metric.
+				continue
+			}
 			transformed := applyVersionRenames(current, v)
 			if transformed == nil {
 				continue
@@ -336,7 +490,12 @@ func (e *schemaEngine) findMatcherVariants(semconvURL, schemaURL string, origina
 		if err != nil {
 			return nil, queryContext{}, err
 		}
-		allVariants = generateMatcherVariants(sc.version, &schema, matchers)
+		// Corroborate each rename against the semconv of the versions it
+		// connects, so a schema edge that joins two unrelated metrics sharing a
+		// surface name is reported rather than silently merged.
+		rv := newRenameValidator(&schema, e.metricLookup(semconvURL))
+		allVariants = generateMatcherVariants(sc.version, &schema, matchers, rv)
+		warnings = append(warnings, rv.warnings...)
 		// Map each historical attribute alias back to its anchor-version name so
 		// results from older or newer eras merge under the queried version's
 		// labels instead of splitting on the renamed attribute. Recomputed per

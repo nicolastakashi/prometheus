@@ -48,7 +48,7 @@ func TestGenerateMatcherVariants(t *testing.T) {
 			labels.MustNewMatcher(labels.MatchEqual, labels.MetricName, "metric.v2"),
 		}
 
-		result := generateMatcherVariants("1.0.0", schema, matchers)
+		result := generateMatcherVariants("1.0.0", schema, matchers, nil)
 
 		// Should have original + 1 version variant.
 		require.Len(t, result, 2)
@@ -72,7 +72,7 @@ func TestGenerateMatcherVariants(t *testing.T) {
 			labels.MustNewMatcher(labels.MatchEqual, "attr.new", "value"),
 		}
 
-		result := generateMatcherVariants("1.0.0", schema, matchers)
+		result := generateMatcherVariants("1.0.0", schema, matchers, nil)
 
 		// Should have original + 1 version variant (both metric AND attr renamed together).
 		require.Len(t, result, 2)
@@ -120,7 +120,7 @@ func TestGenerateMatcherVariants(t *testing.T) {
 			labels.MustNewMatcher(labels.MatchEqual, labels.MetricName, "metric.v3"),
 		}
 
-		result := generateMatcherVariants("1.1.0", schema, matchers)
+		result := generateMatcherVariants("1.1.0", schema, matchers, nil)
 
 		// Anchored at 1.1.0, backward walk resolves: v3 → v2 (via 1.1.0) → v1 (via 1.0.0).
 		require.Len(t, result, 3)
@@ -150,7 +150,7 @@ func TestGenerateMatcherVariants(t *testing.T) {
 			labels.MustNewMatcher(labels.MatchEqual, "attr.v3", "value"),
 		}
 
-		result := generateMatcherVariants("1.1.0", schema, matchers)
+		result := generateMatcherVariants("1.1.0", schema, matchers, nil)
 
 		// Anchored at 1.1.0, should have 3 variants with metric+attr paired correctly.
 		require.Len(t, result, 3)
@@ -188,7 +188,7 @@ func TestGenerateMatcherVariants(t *testing.T) {
 			labels.MustNewMatcher(labels.MatchEqual, labels.MetricName, "my.metric"),
 		}
 
-		result := generateMatcherVariants("1.0.0", schema, matchers)
+		result := generateMatcherVariants("1.0.0", schema, matchers, nil)
 
 		require.Len(t, result, 1)
 		require.Equal(t, matchers, result[0])
@@ -254,7 +254,7 @@ func TestGenerateMatcherVariants_AnchoredTraversal(t *testing.T) {
 		}
 
 		// Anchored at 1.1.0: backward walks [1.0.0, 1.1.0], forward walks [1.1.0, 1.2.0].
-		result := generateMatcherVariants("1.1.0", schema, matchers)
+		result := generateMatcherVariants("1.1.0", schema, matchers, nil)
 
 		require.Len(t, result, 4) // v1, v2, v3, v4
 		names := extractMetricNames(result)
@@ -276,7 +276,7 @@ func TestGenerateMatcherVariants_AnchoredTraversal(t *testing.T) {
 		}
 
 		// Anchored at 1.0.0: backward walks [1.0.0], forward walks [1.0.0, 1.1.0].
-		result := generateMatcherVariants("1.0.0", schema, matchers)
+		result := generateMatcherVariants("1.0.0", schema, matchers, nil)
 
 		names := extractMetricNames(result)
 		require.Contains(t, names, "metric.v1") // backward from anchor
@@ -294,7 +294,7 @@ func TestGenerateMatcherVariants_AnchoredTraversal(t *testing.T) {
 			labels.MustNewMatcher(labels.MatchEqual, labels.MetricName, "metric.new"),
 		}
 
-		result := generateMatcherVariants("v1.0.0", schema, matchers)
+		result := generateMatcherVariants("v1.0.0", schema, matchers, nil)
 
 		require.Len(t, result, 2)
 		names := extractMetricNames(result)

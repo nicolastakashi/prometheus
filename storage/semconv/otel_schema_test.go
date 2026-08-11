@@ -169,6 +169,30 @@ func TestFetchSemconv(t *testing.T) {
 	})
 }
 
+func TestPredecessorOf(t *testing.T) {
+	// A version that renames nothing is dropped from versionRenames but must
+	// still count as a predecessor, since a pre-rename metric name can perfectly
+	// well belong to a version that renamed nothing itself.
+	schema := loadOTelSchemaFile(t, "./testdata/otel_with_chained_renames.yaml")
+	require.Equal(t, []string{"1.0.0", "1.1.0"}, schema.allVersions)
+
+	tests := []struct {
+		version  string
+		expected string
+		found    bool
+	}{
+		{"1.1.0", "1.0.0", true},
+		{"1.0.0", "", false}, // Earliest version has no predecessor.
+		{"9.9.9", "", false}, // Not in the schema's history.
+		{"", "", false},
+	}
+	for _, tc := range tests {
+		got, found := schema.predecessorOf(tc.version)
+		require.Equal(t, tc.found, found, "predecessorOf(%q)", tc.version)
+		require.Equal(t, tc.expected, got, "predecessorOf(%q)", tc.version)
+	}
+}
+
 func TestLoadSemconv(t *testing.T) {
 	t.Run("indexes metric groups with unit and instrument", func(t *testing.T) {
 		sc, err := loadSemconv([]byte(`

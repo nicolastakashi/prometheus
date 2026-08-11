@@ -138,8 +138,31 @@ type otelSchema struct {
 	Versions   map[string]otelSchemaVersion `yaml:"versions"`
 
 	// versionRenames holds per-version renames for generating matcher variants
-	// (populated by loadOTelSchema).
+	// (populated by loadOTelSchema). Versions that rename nothing are omitted.
 	versionRenames []versionRenames
+
+	// allVersions lists every version the schema declares, in ascending semver
+	// order, including versions that rename nothing (populated by
+	// loadOTelSchema). Unlike versionRenames it is a complete history, which is
+	// what identifying the version a pre-rename name belongs to requires: a
+	// rename recorded under version V takes effect at V, so the old name is the
+	// current one at V's immediate predecessor here, which may well be a version
+	// that renames nothing.
+	allVersions []string
+}
+
+// predecessorOf returns the version immediately before v in the schema's version
+// history, and false if v is the earliest version or is not in the history.
+func (s *otelSchema) predecessorOf(v string) (string, bool) {
+	for i, have := range s.allVersions {
+		if have == v {
+			if i == 0 {
+				return "", false
+			}
+			return s.allVersions[i-1], true
+		}
+	}
+	return "", false
 }
 
 // versionRenames holds bidirectional rename mappings from a single schema version.
@@ -148,14 +171,36 @@ type versionRenames struct {
 	version    string            // e.g., "1.1.0"
 	metrics    map[string]string // metric name → its variant (bidirectional)
 	attributes map[string]string // attribute name → its variant (bidirectional)
+
+	// metricsForward holds metric renames in the direction the schema declares
+	// them, old name → new name. metrics is deliberately bidirectional so a walk
+	// can traverse an edge from either end, but that loses which end is the older
+	// name, and validating an edge against the semconv files requires knowing
+	// which version each name belongs to.
+	metricsForward map[string]string
+}
+
+// renameDirection reports the older and newer name of the metric rename edge
+// connecting from to its variant at this version, and false if from is not
+// renamed here.
+func (r versionRenames) renameDirection(from string) (older, newer string, ok bool) {
+	to, ok := r.metrics[from]
+	if !ok {
+		return "", "", false
+	}
+	if _, forward := r.metricsForward[from]; forward {
+		return from, to, true
+	}
+	return to, from, true
 }
 
 // collectVersionRenames extracts bidirectional rename mappings from a schema version.
 func collectVersionRenames(versionStr string, version otelSchemaVersion) *versionRenames {
 	renames := &versionRenames{
-		version:    versionStr,
-		metrics:    make(map[string]string),
-		attributes: make(map[string]string),
+		version:        versionStr,
+		metrics:        make(map[string]string),
+		attributes:     make(map[string]string),
+		metricsForward: make(map[string]string),
 	}
 
 	// Collect attribute renames from "all" section.
@@ -177,6 +222,7 @@ func collectVersionRenames(versionStr string, version otelSchemaVersion) *versio
 				for oldName, newName := range change.RenameMetrics.NameMap {
 					renames.metrics[oldName] = newName
 					renames.metrics[newName] = oldName
+					renames.metricsForward[oldName] = newName
 				}
 			}
 			if change.RenameAttributes != nil {
@@ -288,11 +334,13 @@ func loadOTelSchema(b []byte) (otelSchema, error) {
 	}
 
 	s.versionRenames = make([]versionRenames, 0, len(s.Versions))
+	s.allVersions = make([]string, 0, len(s.Versions))
 
 	for versionStr, version := range s.Versions {
 		if err := validateSemver(versionStr); err != nil {
 			return otelSchema{}, err
 		}
+		s.allVersions = append(s.allVersions, versionStr)
 		if renames := collectVersionRenames(versionStr, version); renames != nil {
 			s.versionRenames = append(s.versionRenames, *renames)
 		}
@@ -301,6 +349,7 @@ func loadOTelSchema(b []byte) (otelSchema, error) {
 	slices.SortFunc(s.versionRenames, func(a, b versionRenames) int {
 		return compareSemver(a.version, b.version)
 	})
+	slices.SortFunc(s.allVersions, compareSemver)
 
 	return s, nil
 }
