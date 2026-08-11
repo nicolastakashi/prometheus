@@ -490,18 +490,26 @@ func (e *schemaEngine) findMatcherVariants(semconvURL, schemaURL string, origina
 		if err != nil {
 			return nil, queryContext{}, err
 		}
+		// Narrow each version's attribute renames to those that apply to this
+		// metric, honouring apply_to_metrics, so a rename declared for one metric
+		// does not rewrite the attributes of every other metric. Done on a shallow
+		// copy to leave the cached schema untouched.
+		scoped := schema
+		scoped.versionRenames = scopedVersionRenames(
+			schema.versionRenames, metricNameAliases(schema.versionRenames, metricName))
+
 		// Corroborate each rename against the semconv of the versions it
 		// connects, so a schema edge that joins two unrelated metrics sharing a
 		// surface name is reported rather than silently merged.
-		rv := newRenameValidator(&schema, e.metricLookup(semconvURL))
-		allVariants = generateMatcherVariants(sc.version, &schema, matchers, rv)
+		rv := newRenameValidator(&scoped, e.metricLookup(semconvURL))
+		allVariants = generateMatcherVariants(sc.version, &scoped, matchers, rv)
 		warnings = append(warnings, rv.warnings...)
 		// Map each historical attribute alias back to its anchor-version name so
 		// results from older or newer eras merge under the queried version's
 		// labels instead of splitting on the renamed attribute. Recomputed per
 		// query on purpose: it is a pure function of the cached schema/semconv and
 		// costs only a few map ops, far less than the fan-out it feeds.
-		attrRenames = buildAttributeRenameMap(sc.version, &schema, sc.attributesOf(metricName))
+		attrRenames = buildAttributeRenameMap(sc.version, &scoped, sc.attributesOf(metricName))
 	}
 
 	return allVariants, queryContext{

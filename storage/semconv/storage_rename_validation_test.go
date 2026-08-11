@@ -159,6 +159,81 @@ func TestRenameEdgeValidation(t *testing.T) {
 	})
 }
 
+// TestAttributeRenameScope checks that an attribute rename restricted by
+// apply_to_metrics does not rewrite the attributes of other metrics. The schema
+// scopes user→tenant to scoped.metric only, so a series of other.metric that
+// carries user must keep it.
+func TestAttributeRenameScope(t *testing.T) {
+	schema := []byte(`file_format: 1.1.0
+schema_url: https://example.com/schemas/1.1.0
+versions:
+  1.0.0:
+  1.1.0:
+    metrics:
+      changes:
+        - rename_attributes:
+            attribute_map:
+              user: tenant
+            apply_to_metrics:
+              - scoped.metric
+`)
+	semconv110 := []byte(`groups:
+  - id: metric.scoped.metric
+    type: metric
+    metric_name: scoped.metric
+    unit: "s"
+    instrument: histogram
+    attributes:
+      - ref: tenant
+  - id: metric.other.metric
+    type: metric
+    metric_name: other.metric
+    unit: "s"
+    instrument: histogram
+    attributes:
+      - ref: tenant
+`)
+
+	underlying := teststorage.New(t)
+	wrapped, err := semconv.AwareStorageWithRegistry(underlying, map[string][]byte{
+		"registry.yaml": schema,
+		"1.1.0":         semconv110,
+	})
+	require.NoError(t, err)
+
+	appendSeries(t, wrapped, "scoped.metric", 1, 1.0, "user", "alice")
+	appendSeries(t, wrapped, "other.metric", 1, 2.0, "user", "bob")
+
+	q, err := wrapped.Querier(0, 10)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = q.Close() })
+
+	selectMetric := func(name string) map[string]float64 {
+		return collectSeries(t, q.Select(context.Background(), false, nil,
+			labels.MustNewMatcher(labels.MatchEqual, model.MetricNameLabel, name),
+			labels.MustNewMatcher(labels.MatchEqual, "__semconv_url__", "registry/1.1.0"),
+			labels.MustNewMatcher(labels.MatchEqual, "__schema_url__", "registry/registry.yaml"),
+		))
+	}
+
+	// The metric the rename is scoped to still has its historical attribute
+	// normalised to the anchor version's name.
+	got := selectMetric("scoped.metric")
+	require.Len(t, got, 1, "got %v", got)
+	for k := range got {
+		require.Contains(t, k, `tenant="alice"`, "the scoped metric must be normalised")
+	}
+
+	// Any other metric must be left alone. Before apply_to_metrics was honoured,
+	// this attribute was rewritten to tenant as well.
+	got = selectMetric("other.metric")
+	require.Len(t, got, 1, "got %v", got)
+	for k := range got {
+		require.Contains(t, k, `user="bob"`, "a rename scoped to another metric must not apply here")
+		require.NotContains(t, k, "tenant=")
+	}
+}
+
 func TestAmbiguousMetricNameWarns(t *testing.T) {
 	// Two groups declaring the same metric_name: the collision that previously
 	// resolved to whichever group was parsed last, with no warning.

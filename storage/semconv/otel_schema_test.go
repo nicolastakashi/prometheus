@@ -55,13 +55,18 @@ func TestLoadOTelSchema(t *testing.T) {
 	t.Run("collects renames from the all section", func(t *testing.T) {
 		schema := loadOTelSchemaFile(t, "./testdata/otel_with_all_section.yaml")
 		require.Len(t, schema.versionRenames, 1)
-		attrs := schema.versionRenames[0].attributes
-		// Global ("all" section) renames are collected bidirectionally...
-		require.Equal(t, "global.new", attrs["global.old"])
-		require.Equal(t, "global.old", attrs["global.new"])
-		// ...alongside the metric-section renames.
-		require.Equal(t, "metric.new", attrs["metric.old"])
-		require.Equal(t, "metric.old", attrs["metric.new"])
+		renames := schema.versionRenames[0]
+		// Global ("all" section) renames apply to every metric and are collected
+		// bidirectionally.
+		require.Equal(t, "global.new", renames.attributes["global.old"])
+		require.Equal(t, "global.old", renames.attributes["global.new"])
+		// The metric-section rename names apply_to_metrics, so it is scoped to
+		// that metric rather than added to the global map.
+		require.NotContains(t, renames.attributes, "metric.old")
+		require.Equal(t, map[string]string{
+			"metric.old": "metric.new",
+			"metric.new": "metric.old",
+		}, renames.attributesPerMetric["my.metric"])
 	})
 
 	t.Run("collects per-version metric renames", func(t *testing.T) {
@@ -75,12 +80,41 @@ func TestLoadOTelSchema(t *testing.T) {
 		require.Equal(t, "another.old.metric", renames.metrics["another.new.metric"])
 	})
 
-	t.Run("collects per-version attribute renames", func(t *testing.T) {
+	t.Run("scopes per-version attribute renames to apply_to_metrics", func(t *testing.T) {
 		schema := loadOTelSchemaFile(t, "./testdata/otel.yaml")
 		require.Len(t, schema.versionRenames, 1)
 		renames := schema.versionRenames[0]
-		require.Equal(t, "http.request.method", renames.attributes["http.method"])
-		require.Equal(t, "http.method", renames.attributes["http.request.method"])
+
+		// This fixture declares two disjoint scopes: HTTP attribute renames for
+		// the two HTTP metrics, and process.cpu.state for process.cpu.time.
+		// Neither may leak into the other, nor into the global map.
+		require.Empty(t, renames.attributes)
+		for _, metric := range []string{"http.server.duration", "http.server.request.count"} {
+			scoped := renames.attributesPerMetric[metric]
+			require.Equal(t, "http.request.method", scoped["http.method"])
+			require.Equal(t, "http.method", scoped["http.request.method"])
+			require.NotContains(t, scoped, "process.cpu.state")
+		}
+		cpu := renames.attributesPerMetric["process.cpu.time"]
+		require.Equal(t, "cpu.mode", cpu["process.cpu.state"])
+		require.NotContains(t, cpu, "http.method")
+	})
+
+	t.Run("scoping narrows a version's renames per metric", func(t *testing.T) {
+		schema := loadOTelSchemaFile(t, "./testdata/otel.yaml")
+
+		// Resolving process.cpu.time must not pick up the HTTP metrics' renames.
+		scoped := scopedVersionRenames(schema.versionRenames,
+			metricNameAliases(schema.versionRenames, "process.cpu.time"))
+		require.Equal(t, "cpu.mode", scoped[0].attributes["process.cpu.state"])
+		require.NotContains(t, scoped[0].attributes, "http.method",
+			"a rename scoped to the HTTP metrics must not apply to process.cpu.time")
+
+		// ...and vice versa.
+		scoped = scopedVersionRenames(schema.versionRenames,
+			metricNameAliases(schema.versionRenames, "http.server.duration"))
+		require.Equal(t, "http.request.method", scoped[0].attributes["http.method"])
+		require.NotContains(t, scoped[0].attributes, "process.cpu.state")
 	})
 
 	t.Run("collects renames from multiple versions", func(t *testing.T) {
