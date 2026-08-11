@@ -16,6 +16,7 @@ package semconv
 import (
 	"embed"
 	"fmt"
+	"maps"
 	"path"
 	"slices"
 	"strconv"
@@ -72,10 +73,46 @@ type semconv struct {
 
 	version string
 
-	// attributesPerMetric lists, per metric name, the attributes the metric
-	// declares at this semconv version (populated by loadSemconv). It seeds
-	// attribute-rename normalisation; see buildAttributeRenameMap.
-	attributesPerMetric map[string][]string
+	// metrics indexes this version's metric groups by their metric_name
+	// (populated by loadSemconv). It answers both "is this name a metric at this
+	// version" and "what does it declare", which is what validating a schema
+	// rename edge needs; see validateMetricRename.
+	metrics map[string]metricDef
+
+	// ambiguousMetrics lists metric names declared by more than one group at
+	// this version, sorted. Such a name has no single definition, so anything
+	// resolved through it is unreliable and is reported to the caller rather
+	// than silently resolved to whichever group happened to be parsed last.
+	ambiguousMetrics []string
+}
+
+// metricDef is the part of a semconv metric group that describes what the metric
+// *is*, as opposed to what it is currently called. unit and instrument are the
+// fields upstream semantic conventions forbid a stable metric from changing (see
+// policies/compatibility.rego in open-telemetry/semantic-conventions), which is
+// what makes them usable as a cross-version identity check.
+//
+// Note that a group's id is deliberately not part of this: upstream lints id to
+// be exactly "metric.<metric_name>" (policies/yaml_schema.rego), so it is a pure
+// function of the surface name and changes in lockstep with every rename. It
+// therefore carries no identity information a rename edge does not already have.
+type metricDef struct {
+	unit       string
+	instrument string
+	attributes []string
+}
+
+// sameMetricAs reports whether d and other are compatible enough to be the same
+// semantic metric across a rename. A differing unit or instrument means two
+// distinct metrics that merely share a surface name at different versions.
+func (d metricDef) sameMetricAs(other metricDef) bool {
+	return d.unit == other.unit && d.instrument == other.instrument
+}
+
+// attributesOf returns the attributes the named metric declares at this semconv
+// version, or nil if the name is not a metric here.
+func (s semconv) attributesOf(name string) []string {
+	return s.metrics[name].attributes
 }
 
 // otelSchema represents an OpenTelemetry schema file.
@@ -162,6 +199,8 @@ type semconvGroup struct {
 	ID         string             `yaml:"id"`
 	Type       string             `yaml:"type"`        // "metric", "attribute", "span", etc.
 	MetricName string             `yaml:"metric_name"` // Only for type="metric"
+	Unit       string             `yaml:"unit"`        // Only for type="metric", e.g. "s", "By"
+	Instrument string             `yaml:"instrument"`  // Only for type="metric", e.g. "histogram", "counter"
 	Attributes []semconvAttribute `yaml:"attributes,omitempty"`
 }
 
@@ -313,16 +352,38 @@ func loadSemconv(b []byte, version string) (semconv, error) {
 		return semconv{}, fmt.Errorf("unmarshal: %w", err)
 	}
 	s.version = version
-	s.attributesPerMetric = make(map[string][]string)
+	s.metrics = make(map[string]metricDef)
+	// A metric name declared by two groups has no single definition. Keeping the
+	// first declaration rather than the last makes the outcome depend on file
+	// order in one direction only, but either choice is arbitrary, so the name is
+	// also recorded as ambiguous and reported to the querier as a warning.
+	var ambiguous map[string]struct{}
 	for _, group := range s.Groups {
-		if group.Type != "metric" || group.MetricName == "" || len(group.Attributes) == 0 {
+		if group.Type != "metric" || group.MetricName == "" {
 			continue
 		}
-		attrs := make([]string, 0, len(group.Attributes))
-		for _, attr := range group.Attributes {
-			attrs = append(attrs, attr.Ref)
+		if _, dup := s.metrics[group.MetricName]; dup {
+			if ambiguous == nil {
+				ambiguous = map[string]struct{}{}
+			}
+			ambiguous[group.MetricName] = struct{}{}
+			continue
 		}
-		s.attributesPerMetric[group.MetricName] = attrs
+		var attrs []string
+		if len(group.Attributes) > 0 {
+			attrs = make([]string, 0, len(group.Attributes))
+			for _, attr := range group.Attributes {
+				attrs = append(attrs, attr.Ref)
+			}
+		}
+		s.metrics[group.MetricName] = metricDef{
+			unit:       group.Unit,
+			instrument: group.Instrument,
+			attributes: attrs,
+		}
+	}
+	if len(ambiguous) > 0 {
+		s.ambiguousMetrics = slices.Sorted(maps.Keys(ambiguous))
 	}
 	return s, nil
 }

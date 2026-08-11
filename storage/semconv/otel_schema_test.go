@@ -169,6 +169,73 @@ func TestFetchSemconv(t *testing.T) {
 	})
 }
 
+func TestLoadSemconv(t *testing.T) {
+	t.Run("indexes metric groups with unit and instrument", func(t *testing.T) {
+		sc, err := loadSemconv([]byte(`
+groups:
+  - id: metric.http.server.request.duration
+    type: metric
+    metric_name: http.server.request.duration
+    unit: s
+    instrument: histogram
+    attributes:
+      - ref: http.request.method
+`), "1.0.0")
+		require.NoError(t, err)
+		require.Equal(t, metricDef{
+			unit:       "s",
+			instrument: "histogram",
+			attributes: []string{"http.request.method"},
+		}, sc.metrics["http.server.request.duration"])
+		require.Empty(t, sc.ambiguousMetrics)
+	})
+
+	t.Run("indexes a metric group that declares no attributes", func(t *testing.T) {
+		// Such a group is still a metric, so it must be visible to the
+		// existence check that validates rename edges, even though it
+		// contributes nothing to attribute-rename normalisation.
+		sc, err := loadSemconv([]byte(`
+groups:
+  - id: metric.queue.depth
+    type: metric
+    metric_name: queue.depth
+    unit: "{item}"
+    instrument: updowncounter
+`), "1.0.0")
+		require.NoError(t, err)
+		require.Contains(t, sc.metrics, "queue.depth")
+		require.Empty(t, sc.attributesOf("queue.depth"))
+	})
+
+	t.Run("reports a metric name declared by more than one group", func(t *testing.T) {
+		// Two groups, same surface name, different semantics. Previously the
+		// second silently overwrote the first, so the queue.depth attributes
+		// were dropped and its unit was reported as the HTTP metric's.
+		sc, err := loadSemconv([]byte(`
+groups:
+  - id: metric.shared.name
+    type: metric
+    metric_name: shared.name
+    unit: s
+    instrument: histogram
+    attributes:
+      - ref: http.request.method
+  - id: metric.shared.name.other
+    type: metric
+    metric_name: shared.name
+    unit: "{item}"
+    instrument: updowncounter
+    attributes:
+      - ref: queue.name
+`), "1.0.0")
+		require.NoError(t, err)
+		require.Equal(t, []string{"shared.name"}, sc.ambiguousMetrics)
+		// Resolution is deterministic (first declaration wins) rather than
+		// dependent on which group happened to be parsed last.
+		require.Equal(t, []string{"http.request.method"}, sc.attributesOf("shared.name"))
+	})
+}
+
 func TestTransformOTelSchemaLabels(t *testing.T) {
 	t.Run("transforms metric and label names", func(t *testing.T) {
 		lbls := labels.FromStrings(

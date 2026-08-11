@@ -15,6 +15,7 @@ package semconv
 
 import (
 	"errors"
+	"fmt"
 	"iter"
 	"slices"
 	"strings"
@@ -247,6 +248,13 @@ func applyVersionRenames(matchers []*labels.Matcher, renames versionRenames) []*
 type queryContext struct {
 	// labelMapping is a mapping to the requested OTel semantic conventions version.
 	labelMapping *labelMapping
+
+	// warnings holds problems found while resolving the query that do not stop
+	// it from being answered, but do mean the answer may fuse or omit series:
+	// an ambiguously declared metric name, or a schema rename edge that the
+	// semconv files contradict. They are surfaced through Warnings() so a user
+	// is told the result is suspect instead of silently trusting it.
+	warnings []string
 }
 
 // getSemconv returns the semconv parsed from url, fetching it via the
@@ -311,6 +319,13 @@ func (e *schemaEngine) findMatcherVariants(semconvURL, schemaURL string, origina
 		return [][]*labels.Matcher{matchers}, queryContext{}, nil
 	}
 
+	var warnings []string
+	if slices.Contains(sc.ambiguousMetrics, metricName) {
+		warnings = append(warnings, fmt.Sprintf(
+			"metric %q is declared by more than one group in semconv %s; its attributes and unit are ambiguous and results may fuse distinct metrics",
+			metricName, sc.version))
+	}
+
 	// Generate schema-version rename variants. In production schemaURL is always
 	// set (classifyMatchers gates fan-out on it); the empty case is reached only
 	// by direct unit tests and falls through to the unmodified matchers.
@@ -327,10 +342,13 @@ func (e *schemaEngine) findMatcherVariants(semconvURL, schemaURL string, origina
 		// labels instead of splitting on the renamed attribute. Recomputed per
 		// query on purpose: it is a pure function of the cached schema/semconv and
 		// costs only a few map ops, far less than the fan-out it feeds.
-		attrRenames = buildAttributeRenameMap(sc.version, &schema, sc.attributesPerMetric[metricName])
+		attrRenames = buildAttributeRenameMap(sc.version, &schema, sc.attributesOf(metricName))
 	}
 
-	return allVariants, queryContext{labelMapping: buildLabelMapping(metricName, attrRenames)}, nil
+	return allVariants, queryContext{
+		labelMapping: buildLabelMapping(metricName, attrRenames),
+		warnings:     warnings,
+	}, nil
 }
 
 // transformSeries returns the series labels rewritten to the canonical OTel

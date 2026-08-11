@@ -243,7 +243,11 @@ func (q *awareQuerier) Select(ctx context.Context, sortSeries bool, hints *stora
 		})
 	}
 	_ = g.Wait()
-	return storage.NewMergeSeriesSet(seriesSets, 0, storage.ChainedSeriesMerge)
+	merged := storage.NewMergeSeriesSet(seriesSets, 0, storage.ChainedSeriesMerge)
+	if len(qCtx.warnings) > 0 {
+		return annotateSeriesSet(merged, qCtx.warnings...)
+	}
+	return merged
 }
 
 func (q *awareQuerier) LabelNames(ctx context.Context, hints *storage.LabelHints, matchers ...*labels.Matcher) ([]string, annotations.Annotations, error) {
@@ -295,7 +299,11 @@ func (q *awareChunkQuerier) Select(ctx context.Context, sortSeries bool, hints *
 		})
 	}
 	_ = g.Wait()
-	return storage.NewMergeChunkSeriesSet(chunkSeriesSets, 0, storage.NewCompactingChunkSeriesMerger(storage.ChainedSeriesMerge))
+	merged := storage.NewMergeChunkSeriesSet(chunkSeriesSets, 0, storage.NewCompactingChunkSeriesMerger(storage.ChainedSeriesMerge))
+	if len(qCtx.warnings) > 0 {
+		return annotateChunkSeriesSet(merged, qCtx.warnings...)
+	}
+	return merged
 }
 
 func (q *awareChunkQuerier) LabelNames(ctx context.Context, hints *storage.LabelHints, matchers ...*labels.Matcher) ([]string, annotations.Annotations, error) {
@@ -369,7 +377,7 @@ func queryLabelNames(ctx context.Context, q labelQuerier, e *schemaEngine, hints
 		}
 	}
 	slices.Sort(combined)
-	return combined, combinedAnns, errors.Join(errs...)
+	return combined, addWarnings(combinedAnns, qCtx), errors.Join(errs...)
 }
 
 func queryLabelValues(ctx context.Context, q labelQuerier, e *schemaEngine, name string, hints *storage.LabelHints, matchers []*labels.Matcher) ([]string, annotations.Annotations, error) {
@@ -447,37 +455,51 @@ func queryLabelValues(ctx context.Context, q labelQuerier, e *schemaEngine, name
 		}
 	}
 	slices.Sort(combined)
-	return combined, combinedAnns, errors.Join(errs...)
+	return combined, addWarnings(combinedAnns, qCtx), errors.Join(errs...)
 }
 
 type annotatedSeriesSet struct {
 	storage.SeriesSet
 
-	warning string
+	warnings []string
 }
 
-func annotateSeriesSet(s storage.SeriesSet, warning string) storage.SeriesSet {
-	return &annotatedSeriesSet{warning: warning, SeriesSet: s}
+func annotateSeriesSet(s storage.SeriesSet, warnings ...string) storage.SeriesSet {
+	return &annotatedSeriesSet{warnings: warnings, SeriesSet: s}
 }
 
 func (s *annotatedSeriesSet) Warnings() annotations.Annotations {
 	got := s.SeriesSet.Warnings()
-	return got.Add(schemaWarning(s.warning))
+	for _, w := range s.warnings {
+		got = got.Add(schemaWarning(w))
+	}
+	return got
+}
+
+// addWarnings merges the query-resolution warnings collected in qCtx into anns.
+func addWarnings(anns annotations.Annotations, qCtx queryContext) annotations.Annotations {
+	for _, w := range qCtx.warnings {
+		anns = anns.Add(schemaWarning(w))
+	}
+	return anns
 }
 
 type annotatedChunkSeriesSet struct {
 	storage.ChunkSeriesSet
 
-	warning string
+	warnings []string
 }
 
-func annotateChunkSeriesSet(s storage.ChunkSeriesSet, warning string) storage.ChunkSeriesSet {
-	return &annotatedChunkSeriesSet{warning: warning, ChunkSeriesSet: s}
+func annotateChunkSeriesSet(s storage.ChunkSeriesSet, warnings ...string) storage.ChunkSeriesSet {
+	return &annotatedChunkSeriesSet{warnings: warnings, ChunkSeriesSet: s}
 }
 
 func (s *annotatedChunkSeriesSet) Warnings() annotations.Annotations {
 	got := s.ChunkSeriesSet.Warnings()
-	return got.Add(schemaWarning(s.warning))
+	for _, w := range s.warnings {
+		got = got.Add(schemaWarning(w))
+	}
+	return got
 }
 
 type awareSeriesSet struct {
