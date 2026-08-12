@@ -115,7 +115,7 @@ func TestRenameEdgeValidation(t *testing.T) {
 
 		require.Empty(t, got, "series of a differently-united metric must not be merged in, got %v", got)
 		requireWarningsContain(t, warnings, "treating them as different metrics")
-		requireWarningsContain(t, warnings, `renames "old.name" to "new.name"`)
+		requireWarningsContain(t, warnings, `links it to "old.name"`)
 	})
 
 	// Same unit, different instrument: a histogram and a counter are not the
@@ -157,6 +157,75 @@ func TestRenameEdgeValidation(t *testing.T) {
 		require.Len(t, got, 1, "expected the series to still merge, got %v", got)
 		requireWarningsContain(t, warnings, "could not be corroborated")
 	})
+}
+
+// TestRecycledMetricName covers the case the schema format cannot express: a
+// metric name that was renamed away and later reused by an unrelated metric.
+//
+//	1.0.0  foo exists, counting bytes
+//	2.0.0  schema renames foo to bar
+//	5.0.0  a new, unrelated metric claims the name foo, measuring seconds
+//
+// Querying foo at 5.0.0 means the new metric. The 2.0.0 rename edge concerns the
+// old foo and must not drag bar's series in. Note that the edge is entirely
+// self-consistent — foo at 1.0.0 and bar at 2.0.0 are both By/counter — so
+// comparing an edge's own two endpoints approves it. Only comparing the hop back
+// to the queried metric catches this.
+func TestRecycledMetricName(t *testing.T) {
+	files := map[string][]byte{
+		"registry.yaml": []byte(`file_format: 1.1.0
+schema_url: https://example.com/schemas/5.0.0
+versions:
+  1.0.0:
+  2.0.0:
+    metrics:
+      changes:
+        - rename_metrics:
+            name_map:
+              foo: bar
+  5.0.0:
+`),
+		"1.0.0": metricSemconv("foo", "By", "counter"),
+		"2.0.0": metricSemconv("bar", "By", "counter"),
+		// 5.0.0 declares both the reused name and the metric the old foo became.
+		"5.0.0": []byte(`groups:
+  - id: metric.foo
+    type: metric
+    metric_name: foo
+    unit: "s"
+    instrument: histogram
+    attributes:
+      - ref: http.response.status_code
+  - id: metric.bar
+    type: metric
+    metric_name: bar
+    unit: "By"
+    instrument: counter
+    attributes:
+      - ref: http.response.status_code
+`),
+	}
+
+	underlying := teststorage.New(t)
+	wrapped, err := semconv.AwareStorageWithRegistry(underlying, files)
+	require.NoError(t, err)
+
+	// Series of the metric the old foo became. Querying today's foo must not
+	// pick these up.
+	appendSeries(t, wrapped, "bar", 1, 7.0, "http.response.status_code", "200")
+
+	q, err := wrapped.Querier(0, 10)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = q.Close() })
+
+	set := q.Select(context.Background(), false, nil,
+		labels.MustNewMatcher(labels.MatchEqual, model.MetricNameLabel, "foo"),
+		labels.MustNewMatcher(labels.MatchEqual, "__semconv_url__", "registry/5.0.0"),
+		labels.MustNewMatcher(labels.MatchEqual, "__schema_url__", "registry/registry.yaml"),
+	)
+	got := collectSeries(t, set)
+	require.Empty(t, got, "an unrelated metric that once held this name must not be merged in, got %v", got)
+	requireWarningsContain(t, warningStrings(set.Warnings()), "treating them as different metrics")
 }
 
 // TestAttributeRenameScope checks that an attribute rename restricted by
