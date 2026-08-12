@@ -233,7 +233,7 @@ func collectVersionRenames(versionStr string, version otelSchemaVersion) *versio
 			if change.RenameMetrics == nil {
 				continue
 			}
-			for oldName, newName := range change.RenameMetrics.NameMap {
+			for oldName, newName := range change.RenameMetrics {
 				renames.metrics[oldName] = newName
 				renames.metrics[newName] = oldName
 				renames.metricsForward[oldName] = newName
@@ -374,16 +374,24 @@ type otelSchemaSection struct {
 
 type otelSchemaChange struct {
 	RenameAttributes *otelRenameAttributes `yaml:"rename_attributes,omitempty"`
-	RenameMetrics    *otelRenameMetrics    `yaml:"rename_metrics,omitempty"`
+
+	// RenameMetrics maps each old metric name to its new name directly, with no
+	// intervening key. This is asymmetric with RenameAttributes, which nests its
+	// mapping under attribute_map, but it is what the file format specifies:
+	//
+	//	metrics:
+	//	  changes:
+	//	    - rename_metrics:
+	//	        http.server.duration: http.server.request.duration
+	//
+	// See the rename_metrics transformation in
+	// https://opentelemetry.io/docs/specs/otel/schemas/file_format_v1.1.0/.
+	RenameMetrics map[string]string `yaml:"rename_metrics,omitempty"`
 }
 
 type otelRenameAttributes struct {
 	AttributeMap   map[string]string `yaml:"attribute_map,omitempty"`
 	ApplyToMetrics []string          `yaml:"apply_to_metrics,omitempty"`
-}
-
-type otelRenameMetrics struct {
-	NameMap map[string]string `yaml:"name_map,omitempty"`
 }
 
 // staticCache is a generic, goroutine-safe cache keyed by URL for static

@@ -37,8 +37,7 @@ versions:
     metrics:
       changes:
         - rename_metrics:
-            name_map:
-              %s: %s
+            %s: %s
 `
 
 // metricSemconv renders a semconv file declaring a single metric group. The
@@ -181,8 +180,7 @@ versions:
     metrics:
       changes:
         - rename_metrics:
-            name_map:
-              foo: bar
+            foo: bar
   5.0.0:
 `),
 		"1.0.0": metricSemconv("foo", "By", "counter"),
