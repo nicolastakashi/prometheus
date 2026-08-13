@@ -236,16 +236,33 @@ func (q *awareQuerier) Select(ctx context.Context, sortSeries bool, hints *stora
 	// error, so cancellation propagation buys nothing anyway.
 	var g errgroup.Group
 	g.SetLimit(fanOutLimit)
+	resort := needsResort(qCtx)
 	for i, ms := range variants {
 		g.Go(func() error {
-			// Sorted, because NewMergeSeriesSet requires it. The underlying
-			// querier sorts by the stored names, and transformSeries then rewrites
-			// them, so the result has to be sorted again afterwards.
-			seriesSets[i] = newSortedSeriesSet(&awareSeriesSet{
+			set := storage.SeriesSet(&awareSeriesSet{
 				SeriesSet: q.Querier.Select(ctx, true, hints, ms...),
 				engine:    q.engine,
 				qCtx:      qCtx,
 			})
+			if resort {
+				// Left lazy on purpose, which means the drains happen one after
+				// another: NewMergeSeriesSet pre-advances every input when it is
+				// constructed, and advancing a buffering set drains it, so all of
+				// them drain on the caller's goroutine.
+				//
+				// Draining here instead, inside the group, would parallelise that
+				// but is not allowed. Only storage.Storage is goroutine-safe; a
+				// Querier is not, and tsdb's demonstrably is not — iterating a
+				// series set calls headIndexReader.Series, which writes to a scratch
+				// buffer shared by every set derived from the same querier. Two
+				// variants drained at once corrupt it. Selecting concurrently is
+				// fine, since the sets are only built there and not read.
+				//
+				// Parallelising the drain means one Querier per variant, which is a
+				// change to what a fan-out holds open, not just to where load runs.
+				set = newSortedSeriesSet(set)
+			}
+			seriesSets[i] = set
 			return nil
 		})
 	}
@@ -293,17 +310,23 @@ func (q *awareChunkQuerier) Select(ctx context.Context, sortSeries bool, hints *
 	}
 
 	chunkSeriesSets := make([]storage.ChunkSeriesSet, len(variants))
-	// ctx rather than an errgroup-derived context, and sorted after the rewrite;
-	// see the Select above for both.
+	// ctx rather than an errgroup-derived context, and re-sorted only where a
+	// rewrite can reorder a set, draining inside the group; see the Select above.
 	var g errgroup.Group
 	g.SetLimit(fanOutLimit)
+	resort := needsResort(qCtx)
 	for i, ms := range variants {
 		g.Go(func() error {
-			chunkSeriesSets[i] = newSortedChunkSeriesSet(&awareChunkSeriesSet{
+			set := storage.ChunkSeriesSet(&awareChunkSeriesSet{
 				ChunkSeriesSet: q.ChunkQuerier.Select(ctx, true, hints, ms...),
 				engine:         q.engine,
 				qCtx:           qCtx,
 			})
+			if resort {
+				// Lazy, so the drains do not overlap; see the Select above.
+				set = newSortedChunkSeriesSet(set)
+			}
+			chunkSeriesSets[i] = set
 			return nil
 		})
 	}
@@ -521,6 +544,25 @@ func (s *annotatedChunkSeriesSet) Warnings() annotations.Annotations {
 	return got
 }
 
+// needsResort reports whether rewriting a variant's labels can change the order
+// the underlying querier returned them in, which is what decides whether a variant
+// has to be buffered and sorted before the merge sees it.
+//
+// Only an attribute rename can. Every series in a variant matches the same equality
+// matcher on __name__, so rewriting the metric name replaces the same value in all
+// of them and leaves their relative order alone; renaming an attribute moves that
+// label within a series and so moves the series within the set. Two series can also
+// collide on the rewritten labels, but only by differing in a renamed attribute's
+// name, so the same condition covers it.
+//
+// This takes it that no stored series carries the reserved __semconv_url__ /
+// __schema_url__ labels, which transformSeries strips and whose removal could
+// likewise reorder a set. They are query-time matchers that nothing writes, and
+// __-prefixed labels are dropped from scraped samples.
+func needsResort(qCtx queryContext) bool {
+	return qCtx.labelMapping != nil && len(qCtx.labelMapping.translatedLabels) > 0
+}
+
 // sortAndChain returns in sorted by labels, with each run of series carrying
 // identical labels collapsed into one via merge.
 //
@@ -571,18 +613,25 @@ type sortedSeriesSet struct {
 	loaded bool
 }
 
-func newSortedSeriesSet(s storage.SeriesSet) storage.SeriesSet {
+func newSortedSeriesSet(s storage.SeriesSet) *sortedSeriesSet {
 	return &sortedSeriesSet{SeriesSet: s, idx: -1}
 }
 
-func (s *sortedSeriesSet) Next() bool {
-	if !s.loaded {
-		s.loaded = true
-		for s.SeriesSet.Next() {
-			s.series = append(s.series, s.SeriesSet.At())
-		}
-		s.series = sortAndChain(s.series, storage.ChainedSeriesMerge)
+// load drains and sorts the underlying set, on the first Next. It must stay on the
+// reading goroutine: the underlying querier is not safe to iterate concurrently.
+func (s *sortedSeriesSet) load() {
+	if s.loaded {
+		return
 	}
+	s.loaded = true
+	for s.SeriesSet.Next() {
+		s.series = append(s.series, s.SeriesSet.At())
+	}
+	s.series = sortAndChain(s.series, storage.ChainedSeriesMerge)
+}
+
+func (s *sortedSeriesSet) Next() bool {
+	s.load()
 	if s.Err() != nil {
 		return false
 	}
@@ -603,18 +652,25 @@ type sortedChunkSeriesSet struct {
 	loaded bool
 }
 
-func newSortedChunkSeriesSet(s storage.ChunkSeriesSet) storage.ChunkSeriesSet {
+func newSortedChunkSeriesSet(s storage.ChunkSeriesSet) *sortedChunkSeriesSet {
 	return &sortedChunkSeriesSet{ChunkSeriesSet: s, idx: -1}
 }
 
-func (s *sortedChunkSeriesSet) Next() bool {
-	if !s.loaded {
-		s.loaded = true
-		for s.ChunkSeriesSet.Next() {
-			s.series = append(s.series, s.ChunkSeriesSet.At())
-		}
-		s.series = sortAndChain(s.series, storage.NewCompactingChunkSeriesMerger(storage.ChainedSeriesMerge))
+// load drains and sorts the underlying set on the first Next; see
+// sortedSeriesSet.load.
+func (s *sortedChunkSeriesSet) load() {
+	if s.loaded {
+		return
 	}
+	s.loaded = true
+	for s.ChunkSeriesSet.Next() {
+		s.series = append(s.series, s.ChunkSeriesSet.At())
+	}
+	s.series = sortAndChain(s.series, storage.NewCompactingChunkSeriesMerger(storage.ChainedSeriesMerge))
+}
+
+func (s *sortedChunkSeriesSet) Next() bool {
+	s.load()
 	if s.Err() != nil {
 		return false
 	}

@@ -15,6 +15,7 @@ package semconv_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/prometheus/common/model"
@@ -22,7 +23,9 @@ import (
 
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/storage"
+	"github.com/prometheus/prometheus/storage/semconv"
 	"github.com/prometheus/prometheus/tsdb/chunkenc"
+	"github.com/prometheus/prometheus/util/teststorage"
 )
 
 // TestFanOutResultIsSorted checks that a variant whose labels were rewritten is
@@ -87,6 +90,53 @@ func TestFanOutResultIsSorted(t *testing.T) {
 		got := collectWithSamples(t, storage.NewSeriesSetFromChunkSeriesSet(set))
 		require.Equal(t, want, got, "expected strictly increasing labels with no duplicates")
 	})
+}
+
+// TestFanOutWithoutAttributeRenameIsSorted guards the assumption that lets a
+// variant stream instead of being buffered and sorted: when the schema renames only
+// the metric, every series in a variant matches the same equality matcher on
+// __name__, so they all get the same replacement and the order the underlying
+// querier returned them in survives. Output must be sorted with no variant sorted
+// after the fact.
+func TestFanOutWithoutAttributeRenameIsSorted(t *testing.T) {
+	wrapped, err := semconv.AwareStorageWithRegistry(teststorage.New(t), map[string][]byte{
+		"registry.yaml": []byte(benchMetricRenameSchema),
+		"1.0.0":         []byte(fmt.Sprintf(benchSemconv, "bench.old", "attr.old")),
+		"1.1.0":         []byte(fmt.Sprintf(benchSemconv, "bench.new", "attr.new")),
+	})
+	require.NoError(t, err)
+
+	// attr.old and attr.new are distinct labels that the schema does not rename, so
+	// nothing rewrites them and the eras interleave in the merged order.
+	appendSeries(t, wrapped, "bench.old", 1, 1.0, "attr.old", "zzz")
+	appendSeries(t, wrapped, "bench.old", 1, 2.0, "attr.old", "aaa")
+	appendSeries(t, wrapped, "bench.new", 1, 3.0, "attr.new", "mmm")
+
+	q, err := wrapped.Querier(0, 10)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = q.Close() })
+
+	set := q.Select(context.Background(), false, nil,
+		labels.MustNewMatcher(labels.MatchEqual, model.MetricNameLabel, "bench.new"),
+		labels.MustNewMatcher(labels.MatchEqual, "__semconv_url__", "registry/1.1.0"),
+		labels.MustNewMatcher(labels.MatchEqual, "__schema_url__", "registry/registry.yaml"),
+	)
+
+	got := collectWithSamples(t, set)
+	require.Equal(t, []seriesWithSamples{
+		{
+			lset:    labels.FromStrings(model.MetricNameLabel, "bench.new", "attr.new", "mmm"),
+			samples: []sample{{t: 1, v: 3.0}},
+		},
+		{
+			lset:    labels.FromStrings(model.MetricNameLabel, "bench.new", "attr.old", "aaa"),
+			samples: []sample{{t: 1, v: 2.0}},
+		},
+		{
+			lset:    labels.FromStrings(model.MetricNameLabel, "bench.new", "attr.old", "zzz"),
+			samples: []sample{{t: 1, v: 1.0}},
+		},
+	}, got)
 }
 
 type sample struct {
