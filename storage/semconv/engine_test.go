@@ -223,7 +223,9 @@ func TestFindVersionAnchorIndex(t *testing.T) {
 		{"exact match middle", "1.1.0", 1},
 		{"exact match last", "1.2.0", 2},
 		{"between versions", "1.0.5", 0},
-		{"before all versions", "0.9.0", 0},
+		// -1, not 0: no version is at or before the anchor, so the backward slice
+		// must be empty and every version must fall on the forward side.
+		{"before all versions", "0.9.0", -1},
 		{"after all versions", "2.0.0", 2},
 		{"with v prefix", "v1.1.0", 1},
 	}
@@ -235,7 +237,7 @@ func TestFindVersionAnchorIndex(t *testing.T) {
 	}
 	t.Run("empty versions", func(t *testing.T) {
 		idx := findVersionAnchorIndex([]versionRenames{}, "1.0.0")
-		require.Equal(t, 0, idx)
+		require.Equal(t, -1, idx)
 	})
 }
 
@@ -284,6 +286,88 @@ func TestGenerateMatcherVariants_AnchoredTraversal(t *testing.T) {
 		require.Contains(t, names, "metric.v3") // forward from anchor
 	})
 
+	t.Run("anchored before the first renaming version walks the whole chain forward", func(t *testing.T) {
+		// No version is at or before the anchor, so every rename must be walked
+		// forward from the queried name. Anchoring at index 0 instead put 1.1.0 on
+		// the backward side, which reached metric.v2 but left 1.2.0 with nothing to
+		// chain from, so metric.v3 was never queried.
+		schema := &otelSchema{
+			versionRenames: []versionRenames{
+				{version: "1.1.0", metrics: map[string]string{"metric.v1": "metric.v2", "metric.v2": "metric.v1"}},
+				{version: "1.2.0", metrics: map[string]string{"metric.v2": "metric.v3", "metric.v3": "metric.v2"}},
+			},
+		}
+		matchers := []*labels.Matcher{
+			labels.MustNewMatcher(labels.MatchEqual, labels.MetricName, "metric.v1"),
+		}
+
+		result := generateMatcherVariants("1.0.0", schema, matchers, nil)
+
+		names := extractMetricNames(result)
+		require.ElementsMatch(t, []string{"metric.v1", "metric.v2", "metric.v3"}, names)
+	})
+
+	t.Run("continues forward from a name the anchor version renamed away", func(t *testing.T) {
+		// metric.v1 is not the name this metric has at 1.1.0 — 1.1.0 is the version
+		// that renamed it — so the backward walk crosses that rename and lands on
+		// metric.v2. The 1.2.0 rename is of metric.v2, so the forward walk has to
+		// start from what the backward walk found rather than from the queried name.
+		schema := &otelSchema{
+			versionRenames: []versionRenames{
+				{
+					version:        "1.1.0",
+					metrics:        map[string]string{"metric.v1": "metric.v2", "metric.v2": "metric.v1"},
+					metricsForward: map[string]string{"metric.v1": "metric.v2"},
+				},
+				{
+					version:        "1.2.0",
+					metrics:        map[string]string{"metric.v2": "metric.v3", "metric.v3": "metric.v2"},
+					metricsForward: map[string]string{"metric.v2": "metric.v3"},
+				},
+			},
+		}
+		matchers := []*labels.Matcher{
+			labels.MustNewMatcher(labels.MatchEqual, labels.MetricName, "metric.v1"),
+		}
+
+		result := generateMatcherVariants("1.1.0", schema, matchers, nil)
+
+		names := extractMetricNames(result)
+		require.ElementsMatch(t, []string{"metric.v1", "metric.v2", "metric.v3"}, names)
+	})
+
+	t.Run("does not follow a post-anchor rename of a retired name", func(t *testing.T) {
+		// 1.1.0 renames metric.v1 to metric.v2, and 1.2.0 renames metric.v1 again —
+		// a name retired at 1.1.0 being reused by an unrelated metric. Anchored at
+		// 1.1.0, the backward walk reaches metric.v1 by undoing the first rename, so
+		// it must not seed the forward walk: metric.v1 stopped being this metric's
+		// name at 1.1.0, and what 1.2.0 does with the name afterwards is not its
+		// history. rv is nil here, so nothing but the walk itself excludes it.
+		schema := &otelSchema{
+			versionRenames: []versionRenames{
+				{
+					version:        "1.1.0",
+					metrics:        map[string]string{"metric.v1": "metric.v2", "metric.v2": "metric.v1"},
+					metricsForward: map[string]string{"metric.v1": "metric.v2"},
+				},
+				{
+					version:        "1.2.0",
+					metrics:        map[string]string{"metric.v1": "other.metric", "other.metric": "metric.v1"},
+					metricsForward: map[string]string{"metric.v1": "other.metric"},
+				},
+			},
+		}
+		matchers := []*labels.Matcher{
+			labels.MustNewMatcher(labels.MatchEqual, labels.MetricName, "metric.v2"),
+		}
+
+		result := generateMatcherVariants("1.1.0", schema, matchers, nil)
+
+		names := extractMetricNames(result)
+		require.ElementsMatch(t, []string{"metric.v2", "metric.v1"}, names)
+		require.NotContains(t, names, "other.metric")
+	})
+
 	t.Run("handles version with v prefix", func(t *testing.T) {
 		schema := &otelSchema{
 			versionRenames: []versionRenames{
@@ -325,6 +409,22 @@ func TestBuildAttributeRenameMap(t *testing.T) {
 		}
 		got := buildAttributeRenameMap("1.1.0", schema, []string{"attr.v3"})
 		require.Equal(t, map[string]string{"attr.v2": "attr.v3", "attr.v1": "attr.v3"}, got)
+	})
+
+	t.Run("anchored before the first renaming version follows the chain forward", func(t *testing.T) {
+		// Every version postdates the anchor, so all of them belong to the forward
+		// walk. Putting the earliest of them on the backward side instead left the
+		// forward walk starting from attr.v1, which 1.2.0 does not rename, so
+		// attr.v3 never mapped back to the anchor name and a series carrying it
+		// would have split off on its own.
+		schema := &otelSchema{
+			versionRenames: []versionRenames{
+				{version: "1.1.0", attributes: map[string]string{"attr.v1": "attr.v2", "attr.v2": "attr.v1"}},
+				{version: "1.2.0", attributes: map[string]string{"attr.v2": "attr.v3", "attr.v3": "attr.v2"}},
+			},
+		}
+		got := buildAttributeRenameMap("1.0.0", schema, []string{"attr.v1"})
+		require.Equal(t, map[string]string{"attr.v2": "attr.v1", "attr.v3": "attr.v1"}, got)
 	})
 
 	t.Run("no schema renames returns nil", func(t *testing.T) {

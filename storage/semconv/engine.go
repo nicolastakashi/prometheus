@@ -243,11 +243,19 @@ func extractMetricName(matchers []*labels.Matcher) (string, error) {
 	return "", nil
 }
 
-// findVersionAnchorIndex returns the index of the largest version <= targetVersion.
-// The versions slice must be sorted in ascending semver order.
+// findVersionAnchorIndex returns the index of the largest version <=
+// targetVersion, or -1 when every version renames something newer than
+// targetVersion. The versions slice must be sorted in ascending semver order.
+//
+// Returning -1 rather than clamping to 0 matters, because callers split the slice
+// into versions at or before the anchor (versions[:idx+1], walked backward for
+// older names) and versions after it (versions[idx+1:], walked forward for newer
+// ones). Clamping puts the first renaming version on the backward side even though
+// it postdates the anchor, which both walks that rename in the wrong direction and
+// leaves it out of the forward chain, truncating everything that follows it.
 func findVersionAnchorIndex(versions []versionRenames, targetVersion string) int {
 	target := strings.TrimPrefix(targetVersion, "v")
-	anchorIdx := 0
+	anchorIdx := -1
 	for i, v := range versions {
 		if compareSemver(v.version, target) > 0 {
 			break
@@ -275,16 +283,34 @@ func generateMatcherVariants(version string, schema *otelSchema, matchers []*lab
 	anchorIdx := findVersionAnchorIndex(schema.versionRenames, version)
 
 	// Backward for older names.
-	variants = walkVersions(schema.versionRenames[:anchorIdx+1], matchers, seen, variants, true, rv)
+	variants, applied := walkVersions(schema.versionRenames[:anchorIdx+1], matchers, seen, variants, true, rv)
 
-	// Forward for newer names.
-	variants = walkVersions(schema.versionRenames[anchorIdx+1:], matchers, seen, variants, false, rv)
+	// Forward for newer names, from the queried name and from any name the backward
+	// walk reached by applying a rename rather than undoing one. A rename edge is
+	// stored bidirectionally, so a version at or before the anchor that renames the
+	// queried name away is walked backward yet lands on the newer name — as it must,
+	// since a user may well query a name the anchor version has already renamed. A
+	// later version then renames that name, not the queried one, and seeding the
+	// forward walk only with the queried name would cut the chain there.
+	//
+	// Names the backward walk reached by undoing a rename are deliberately not
+	// seeded. Those stopped being current before the anchor, so a later version
+	// renaming one of them is not this metric's history but a reuse of a retired
+	// name, and following it would pull an unrelated metric into the result.
+	for _, start := range append([][]*labels.Matcher{matchers}, applied...) {
+		variants, _ = walkVersions(schema.versionRenames[anchorIdx+1:], start, seen, variants, false, rv)
+	}
 
 	return variants
 }
 
 // walkVersions walks through versions applying renames, chaining results until no new variants.
 // If reverse is false, walks oldest→newest; if true, walks newest→oldest.
+//
+// applied holds the variants produced by a hop that renamed the metric in the
+// direction the schema declares it, rather than undoing a rename. Walking backward
+// those are the names the metric took at or after the version crossed, which is what
+// the forward walk has to continue from; see generateMatcherVariants.
 func walkVersions(
 	versions []versionRenames,
 	matchers []*labels.Matcher,
@@ -292,7 +318,7 @@ func walkVersions(
 	result [][]*labels.Matcher,
 	reverse bool,
 	rv *renameValidator,
-) [][]*labels.Matcher {
+) (variants [][]*labels.Matcher, applied [][]*labels.Matcher) {
 	current := matchers
 	for {
 		found := false
@@ -323,6 +349,11 @@ func walkVersions(
 
 			seen[key] = struct{}{}
 			result = append(result, transformed)
+			if transformedName, nameErr := extractMetricName(transformed); nameErr == nil && currentName != "" {
+				if newer, ok := v.metricsForward[currentName]; ok && newer == transformedName {
+					applied = append(applied, transformed)
+				}
+			}
 			current = transformed
 			found = true
 			break
@@ -331,7 +362,7 @@ func walkVersions(
 			break
 		}
 	}
-	return result
+	return result, applied
 }
 
 // buildAttributeRenameMap returns a map from each historical or forward
