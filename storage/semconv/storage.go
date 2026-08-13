@@ -229,16 +229,23 @@ func (q *awareQuerier) Select(ctx context.Context, sortSeries bool, hints *stora
 	}
 
 	seriesSets := make([]storage.SeriesSet, len(variants))
-	g, gctx := errgroup.WithContext(ctx)
+	// Deliberately not errgroup.WithContext: a Select is lazy, so its context must
+	// outlive g.Wait() here, and WithContext cancels its derived context as soon as
+	// Wait returns. The variants are read only after that, which with a streaming
+	// underlying querier would abort the read mid-stream. Nothing here returns an
+	// error, so cancellation propagation buys nothing anyway.
+	var g errgroup.Group
 	g.SetLimit(fanOutLimit)
 	for i, ms := range variants {
 		g.Go(func() error {
-			// We must sort for NewMergeSeriesSet to work.
-			seriesSets[i] = &awareSeriesSet{
-				SeriesSet: q.Querier.Select(gctx, true, hints, ms...),
+			// Sorted, because NewMergeSeriesSet requires it. The underlying
+			// querier sorts by the stored names, and transformSeries then rewrites
+			// them, so the result has to be sorted again afterwards.
+			seriesSets[i] = newSortedSeriesSet(&awareSeriesSet{
+				SeriesSet: q.Querier.Select(ctx, true, hints, ms...),
 				engine:    q.engine,
 				qCtx:      qCtx,
-			}
+			})
 			return nil
 		})
 	}
@@ -286,15 +293,17 @@ func (q *awareChunkQuerier) Select(ctx context.Context, sortSeries bool, hints *
 	}
 
 	chunkSeriesSets := make([]storage.ChunkSeriesSet, len(variants))
-	g, gctx := errgroup.WithContext(ctx)
+	// ctx rather than an errgroup-derived context, and sorted after the rewrite;
+	// see the Select above for both.
+	var g errgroup.Group
 	g.SetLimit(fanOutLimit)
 	for i, ms := range variants {
 		g.Go(func() error {
-			chunkSeriesSets[i] = &awareChunkSeriesSet{
-				ChunkSeriesSet: q.ChunkQuerier.Select(gctx, true, hints, ms...),
+			chunkSeriesSets[i] = newSortedChunkSeriesSet(&awareChunkSeriesSet{
+				ChunkSeriesSet: q.ChunkQuerier.Select(ctx, true, hints, ms...),
 				engine:         q.engine,
 				qCtx:           qCtx,
-			}
+			})
 			return nil
 		})
 	}
@@ -500,6 +509,111 @@ func (s *annotatedChunkSeriesSet) Warnings() annotations.Annotations {
 		got = got.Add(schemaWarning(w))
 	}
 	return got
+}
+
+// sortAndChain returns in sorted by labels, with each run of series carrying
+// identical labels collapsed into one via merge.
+//
+// Both are needed because rewriting labels can reorder a set and can make two
+// series collide. A variant queries one naming era and its series come back sorted
+// by that era's names; rewriting an attribute to its anchor-version name moves it
+// in the ordering, and two series distinguished only by the era of an attribute
+// name rewrite to the very same labels. storage.NewMergeSeriesSet assumes each
+// input reports strictly increasing labels, so it would emit the reordered series
+// out of order and the collided ones twice.
+func sortAndChain[T interface{ Labels() labels.Labels }](in []T, merge func(...T) T) []T {
+	slices.SortStableFunc(in, func(a, b T) int {
+		return labels.Compare(a.Labels(), b.Labels())
+	})
+	// A fresh slice, deliberately not in[:0]: the merge functions retain the slice
+	// they are handed and read it only when the merged series is iterated, so
+	// compacting in place would write a merged series back into the very range its
+	// own chain still points at, and iterating it would recurse forever.
+	out := make([]T, 0, len(in))
+	for i := 0; i < len(in); {
+		j := i + 1
+		for j < len(in) && labels.Equal(in[j].Labels(), in[i].Labels()) {
+			j++
+		}
+		if j-i == 1 {
+			out = append(out, in[i])
+		} else {
+			out = append(out, merge(in[i:j]...))
+		}
+		i = j
+	}
+	return out
+}
+
+// sortedSeriesSet re-sorts a series set whose labels have been rewritten, so it
+// can be fed to storage.NewMergeSeriesSet.
+//
+// It buffers the whole set on first use, which the SeriesSet contract permits:
+// "Returned series should be iterable even after Next is called", so only the
+// series handles are held, not their samples. That is the price of rewriting labels
+// before merging rather than after — the sort order is not known until every label
+// has been rewritten.
+type sortedSeriesSet struct {
+	storage.SeriesSet
+
+	series []storage.Series
+	idx    int
+	loaded bool
+}
+
+func newSortedSeriesSet(s storage.SeriesSet) storage.SeriesSet {
+	return &sortedSeriesSet{SeriesSet: s, idx: -1}
+}
+
+func (s *sortedSeriesSet) Next() bool {
+	if !s.loaded {
+		s.loaded = true
+		for s.SeriesSet.Next() {
+			s.series = append(s.series, s.SeriesSet.At())
+		}
+		s.series = sortAndChain(s.series, storage.ChainedSeriesMerge)
+	}
+	if s.Err() != nil {
+		return false
+	}
+	s.idx++
+	return s.idx < len(s.series)
+}
+
+func (s *sortedSeriesSet) At() storage.Series {
+	return s.series[s.idx]
+}
+
+// sortedChunkSeriesSet is sortedSeriesSet for chunk series; see there.
+type sortedChunkSeriesSet struct {
+	storage.ChunkSeriesSet
+
+	series []storage.ChunkSeries
+	idx    int
+	loaded bool
+}
+
+func newSortedChunkSeriesSet(s storage.ChunkSeriesSet) storage.ChunkSeriesSet {
+	return &sortedChunkSeriesSet{ChunkSeriesSet: s, idx: -1}
+}
+
+func (s *sortedChunkSeriesSet) Next() bool {
+	if !s.loaded {
+		s.loaded = true
+		for s.ChunkSeriesSet.Next() {
+			s.series = append(s.series, s.ChunkSeriesSet.At())
+		}
+		s.series = sortAndChain(s.series, storage.NewCompactingChunkSeriesMerger(storage.ChainedSeriesMerge))
+	}
+	if s.Err() != nil {
+		return false
+	}
+	s.idx++
+	return s.idx < len(s.series)
+}
+
+func (s *sortedChunkSeriesSet) At() storage.ChunkSeries {
+	return s.series[s.idx]
 }
 
 type awareSeriesSet struct {
