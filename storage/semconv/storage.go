@@ -377,6 +377,11 @@ func queryLabelNames(ctx context.Context, q labelQuerier, e *schemaEngine, hints
 		}
 		combinedAnns.Merge(p.anns)
 		for _, n := range p.names {
+			if isReservedLabel(n) {
+				// Select strips these from the series it returns, so reporting
+				// them as label names would advertise labels no series carries.
+				continue
+			}
 			canonical := reverseLabelName(qCtx, n)
 			if _, ok := seen[canonical]; ok {
 				continue
@@ -414,7 +419,12 @@ func queryLabelValues(ctx context.Context, q labelQuerier, e *schemaEngine, name
 	// values; mismatched (variant, alias) pairs simply return nothing. For
 	// __name__ there are no attribute aliases (aliasesOf returns just the name),
 	// and its values are collapsed to the canonical metric below.
-	aliases := qCtx.labelMapping.aliasesOf(name)
+	//
+	// name is canonicalised first, so asking for a historical name of a renamed
+	// attribute fans out over the same alias set as asking for its anchor-version
+	// name; otherwise aliasesOf, which only expands a canonical name, would return
+	// the historical name alone and miss every other era.
+	aliases := qCtx.labelMapping.aliasesOf(reverseLabelName(qCtx, name))
 
 	type partial struct {
 		values []string
