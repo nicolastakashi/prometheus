@@ -457,5 +457,36 @@ For `test` in semconv 1.1.0, this matches the metric's earlier names (e.g.
 `test.counter` in 1.0.0) declared by the schema's `versions` section and merges
 the results under the queried name `test`.
 
+### Warnings
+
+A schema names metrics only by their surface name, so nothing in it separates a
+genuine rename from an edge joining two unrelated metrics that held the same name
+at different times — a name renamed away may later be reused. Before following a
+rename, Prometheus therefore checks it against the semconv files of the versions
+it connects: `unit` and `instrument` describe what a metric is rather than what it
+is called, and semantic conventions forbid a stable metric from changing either,
+so a disagreement means the two names denote different metrics.
+
+The query still returns results in every case below, with a warning attached:
+
+- **The rename was contradicted.** The schema links the queried metric to a name
+  that a semconv file declares with a different unit or instrument. That rename is
+  not followed and its series are left out, because combining metrics measured in
+  different units yields meaningless numbers.
+- **The rename could not be corroborated.** A name a rename refers to is not
+  declared as a metric by the semconv of the version it belongs to, so there is
+  nothing to check it against. The rename is still followed: a registry may
+  legitimately ship semconv files trimmed to the metrics its operator cares about.
+- **The queried metric's identity is unknown.** No semconv version declares the
+  queried name, or the versions that do disagree on what it is — which happens when
+  a name was retired and later reused. No rename of it can be checked, so all of
+  them are followed unchecked and the result may merge unrelated series.
+- **The metric name is ambiguous.** More than one group in the anchor semconv
+  declares the same `metric_name`, so its unit and attributes have no single
+  answer and the result may fuse distinct metrics.
+
+Warnings are surfaced as PromQL warnings, and appear in the `warnings` field of an
+API response and in the expression browser.
+
 This feature is experimental: the matcher names, the registry layout, and the
 `semconv` configuration block are subject to change.

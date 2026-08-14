@@ -356,9 +356,13 @@ against the active registry under the `registry/` namespace. Prometheus uses
 the registry embedded in the binary by default, but operators can configure a
 local-files or remote-archive registry via the `semconv` block, which fully
 replaces the embedded registry. The matcher values are registry paths, not
-locations; arbitrary HTTP URLs and filesystem paths are rejected. See
+locations; arbitrary HTTP URLs and filesystem paths are rejected.
+
+Renames are checked against the semconv files before being followed, and a query
+returns a warning when one is contradicted, cannot be checked, or the metric name
+is ambiguous. See
 [Semconv Versioned Read](../feature_flags.md#semconv-versioned-read) for
-the supported registry layout, examples, and the limitations of the
+the supported registry layout, examples, the warnings, and the limitations of the
 fan-out.
 
 ### Range Vector Selectors
