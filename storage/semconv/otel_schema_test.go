@@ -362,3 +362,33 @@ func TestReadRegistryFile(t *testing.T) {
 		}
 	})
 }
+
+func TestEraVersionsOf(t *testing.T) {
+	// old.name is current up to 1.0.0, new.name from 1.1.0 on, and 1.2.0 hands
+	// old.name to an unrelated metric, giving that name a second era.
+	schema, err := loadOTelSchema([]byte(`file_format: 1.1.0
+schema_url: https://example.com/schemas/1.1.0
+versions:
+  1.0.0:
+  1.1.0:
+    metrics:
+      changes:
+        - rename_metrics:
+            old.name: new.name
+  1.2.0:
+    metrics:
+      changes:
+        - rename_metrics:
+            other.name: old.name
+`))
+	require.NoError(t, err)
+
+	// Retired at 1.1.0, so current up to 1.0.0; reintroduced at 1.2.0.
+	require.Equal(t, []string{"1.0.0", "1.2.0"}, schema.eraVersionsOf("old.name"))
+	// Introduced at 1.1.0 and never renamed away.
+	require.Equal(t, []string{"1.1.0"}, schema.eraVersionsOf("new.name"))
+	// Renamed away at 1.2.0, so current up to 1.1.0.
+	require.Equal(t, []string{"1.1.0"}, schema.eraVersionsOf("other.name"))
+	// Not mentioned by any rename, so the schema says nothing about its era.
+	require.Empty(t, schema.eraVersionsOf("unrelated.name"))
+}

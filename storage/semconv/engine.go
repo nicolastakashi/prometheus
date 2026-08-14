@@ -115,10 +115,11 @@ type renameValidator struct {
 	schema *otelSchema
 	lookup metricLookup
 
-	// anchorName/anchorVersion/anchorDef describe the metric the query asked
-	// for. anchorKnown is false when the anchor semconv does not declare it, in
-	// which case there is no identity to compare hops against and no check is
-	// possible.
+	// anchorName/anchorVersion/anchorDef describe the metric the query asked for.
+	// anchorVersion is the queried semconv version where it declares the name, and
+	// otherwise the version the identity was recovered from; see
+	// identityFromOwnEra. anchorKnown is false only when no version settles what
+	// the name denotes, leaving no identity to compare hops against.
 	anchorName    string
 	anchorVersion string
 	anchorDef     metricDef
@@ -130,15 +131,56 @@ type renameValidator struct {
 
 func newRenameValidator(schema *otelSchema, lookup metricLookup, anchor semconv, anchorName string) *renameValidator {
 	def, known := anchor.metrics[anchorName]
+	version := anchor.version
+	if !known {
+		// The anchor semconv does not declare the queried name, which is an
+		// ordinary thing to query: the walk deliberately supports asking for a name
+		// the anchor version has already renamed away. Rather than give up on
+		// checking anything, take the metric's identity from a version where the
+		// name is the current one.
+		// version stays the queried one when this fails, so the warning that
+		// follows names the semconv the user actually asked for.
+		if eraDef, eraVersion, eraKnown := identityFromOwnEra(schema, lookup, anchorName); eraKnown {
+			def, version, known = eraDef, eraVersion, true
+		}
+	}
 	return &renameValidator{
 		schema:        schema,
 		lookup:        lookup,
 		anchorName:    anchorName,
-		anchorVersion: anchor.version,
+		anchorVersion: version,
 		anchorDef:     def,
 		anchorKnown:   known,
 		seen:          map[string]struct{}{},
 	}
+}
+
+// identityFromOwnEra resolves what name meant at a version where it is the current
+// name, for use when the queried semconv version does not declare it.
+//
+// It declines to answer when the schema retires the name and later reintroduces it
+// and the two eras disagree on what the metric is, because then there is no single
+// answer to what the queried name denotes and picking one would corroborate hops
+// against an identity the user never asked for.
+func identityFromOwnEra(schema *otelSchema, lookup metricLookup, name string) (metricDef, string, bool) {
+	var (
+		found   metricDef
+		version string
+		ok      bool
+	)
+	for _, era := range schema.eraVersionsOf(name) {
+		def, declared, _ := lookup(era, name)
+		if !declared {
+			continue
+		}
+		if ok && !def.sameMetricAs(found) {
+			return metricDef{}, "", false
+		}
+		if !ok {
+			found, version, ok = def, era, true
+		}
+	}
+	return found, version, ok
 }
 
 func (rv *renameValidator) warn(format string, args ...any) {
@@ -195,11 +237,22 @@ func (rv *renameValidator) hopTarget(r versionRenames, from string) (to, version
 // edge, but a registry may legitimately ship a semconv trimmed to the metrics its
 // operator cares about, and dropping variants over that would lose real series.
 func (rv *renameValidator) allowEdge(r versionRenames, from string) bool {
-	if rv == nil || !rv.anchorKnown {
+	if rv == nil {
 		return true
 	}
 	to, version, ok := rv.hopTarget(r, from)
 	if !ok {
+		return true
+	}
+	if !rv.anchorKnown {
+		// No semconv version declares the queried name, or the ones that do
+		// disagree on what it is. Every hop is then traversed unchecked, which is
+		// reported rather than left silent: this is the case the corroboration
+		// exists for, so a caller should know it did not run. Reported only here,
+		// where a metric rename is actually being followed, so a query that crosses
+		// no rename says nothing.
+		rv.warn("metric %q is not declared by semconv %s, and no other version of it settles what the metric is; schema renames of it are being followed without corroboration and may merge unrelated series",
+			rv.anchorName, rv.anchorVersion)
 		return true
 	}
 

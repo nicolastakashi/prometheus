@@ -165,6 +165,43 @@ func (s *otelSchema) predecessorOf(v string) (string, bool) {
 	return "", false
 }
 
+// eraVersionsOf returns the versions at which name is the metric's current name,
+// as far as the schema's rename edges say: the version that introduced the name,
+// and the version before the one that renamed it away. Both lie inside an era in
+// which the name is current, so either can be asked what the name meant then.
+//
+// More than one is returned only when the schema renames the name away and later
+// introduces it again — a retired name reused by another metric — in which case
+// which era a caller means is genuinely ambiguous and the callers here decline to
+// guess. Versions are returned in ascending order and are never repeated.
+func (s *otelSchema) eraVersionsOf(name string) []string {
+	var out []string
+	for _, v := range s.versionRenames {
+		older, newer, ok := v.renameDirection(name)
+		if !ok {
+			continue
+		}
+		var era string
+		switch name {
+		case older:
+			// Renamed away here, so current up to the version before this one.
+			predecessor, hasPredecessor := s.predecessorOf(v.version)
+			if !hasPredecessor {
+				continue
+			}
+			era = predecessor
+		case newer:
+			// Introduced here, so current from this version on.
+			era = v.version
+		}
+		if era != "" && !slices.Contains(out, era) {
+			out = append(out, era)
+		}
+	}
+	slices.SortFunc(out, compareSemver)
+	return out
+}
+
 // versionRenames holds bidirectional rename mappings from a single schema version.
 // When a version renames a→b, both directions are stored for lookup.
 type versionRenames struct {

@@ -395,3 +395,88 @@ func TestChunkQuerierSurfacesWarnings(t *testing.T) {
 	}
 	require.True(t, found, "expected the chunk querier to surface the mis-linked rename warning")
 }
+
+// recycledSchema retires old.name at 1.1.0 and hands the name to an unrelated
+// metric at 1.2.0, so the name has two eras and they need not mean the same thing.
+const recycledSchema = `file_format: 1.1.0
+schema_url: https://example.com/schemas/1.1.0
+versions:
+  1.0.0:
+  1.1.0:
+    metrics:
+      changes:
+        - rename_metrics:
+            old.name: new.name
+  1.2.0:
+    metrics:
+      changes:
+        - rename_metrics:
+            other.name: old.name
+`
+
+// TestRenameValidationWithoutAnchorDeclaration covers querying a name the anchor
+// semconv does not declare, which is ordinary input here: the fan-out deliberately
+// supports asking for a name the anchor version has already renamed away.
+//
+// Corroboration used to switch itself off silently for exactly that query, which is
+// the case it exists for. The identity of the queried metric is instead taken from a
+// version where the name is the current one, and only where no version settles it is
+// the check skipped — and then said so.
+func TestRenameValidationWithoutAnchorDeclaration(t *testing.T) {
+	t.Run("corroborates against the era that declares the queried name", func(t *testing.T) {
+		// Semconv 1.1.0 knows only new.name, so the queried old.name is resolved
+		// against 1.0.0, where it is current. The two disagree on unit and
+		// instrument, so the rename joins unrelated metrics and must not merge.
+		got, warnings := selectRenamed(t, map[string][]byte{
+			"registry.yaml": []byte(fmt.Sprintf(renameSchema, "old.name", "new.name")),
+			"1.0.0":         metricSemconv("old.name", "{item}", "updowncounter"),
+			"1.1.0":         metricSemconv("new.name", "s", "histogram"),
+		}, "new.name", "old.name")
+
+		require.Empty(t, got, "the contradicted rename must not pull in the other metric's series, got %v", got)
+		requireWarningsContain(t, warnings, "treating them as different metrics")
+	})
+
+	t.Run("merges when the era that declares the queried name agrees", func(t *testing.T) {
+		got, warnings := selectRenamed(t, map[string][]byte{
+			"registry.yaml": []byte(fmt.Sprintf(renameSchema, "old.name", "new.name")),
+			"1.0.0":         metricSemconv("old.name", "s", "histogram"),
+			"1.1.0":         metricSemconv("new.name", "s", "histogram"),
+		}, "new.name", "old.name")
+
+		require.Len(t, got, 1, "expected the renamed series under the queried name, got %v", got)
+		for k := range got {
+			require.Contains(t, k, `__name__="old.name"`)
+		}
+		require.Empty(t, warnings, "a corroborated rename must not warn")
+	})
+
+	t.Run("warns when no version declares the queried name", func(t *testing.T) {
+		// Nothing declares old.name anywhere, so there is no identity to check
+		// hops against. The series still merge, but the caller is told the
+		// corroboration did not run rather than left to assume it passed.
+		got, warnings := selectRenamed(t, map[string][]byte{
+			"registry.yaml": []byte(fmt.Sprintf(renameSchema, "old.name", "new.name")),
+			"1.0.0":         metricSemconv("unrelated.name", "s", "histogram"),
+			"1.1.0":         metricSemconv("new.name", "s", "histogram"),
+		}, "new.name", "old.name")
+
+		require.Len(t, got, 1, "an unverifiable rename is still followed, got %v", got)
+		requireWarningsContain(t, warnings, "without corroboration")
+	})
+
+	t.Run("warns when the queried name's eras disagree on what it is", func(t *testing.T) {
+		// old.name is current at 1.0.0 and again at 1.2.0, as two different
+		// metrics. Neither era can stand in for the other, so picking one would
+		// check hops against an identity the caller never asked for.
+		got, warnings := selectRenamed(t, map[string][]byte{
+			"registry.yaml": []byte(recycledSchema),
+			"1.0.0":         metricSemconv("old.name", "{item}", "updowncounter"),
+			"1.1.0":         metricSemconv("new.name", "s", "histogram"),
+			"1.2.0":         metricSemconv("old.name", "s", "histogram"),
+		}, "new.name", "old.name")
+
+		require.Len(t, got, 1, "an unverifiable rename is still followed, got %v", got)
+		requireWarningsContain(t, warnings, "without corroboration")
+	})
+}
