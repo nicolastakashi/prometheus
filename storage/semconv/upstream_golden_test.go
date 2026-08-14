@@ -34,6 +34,13 @@ import (
 // the file format does not have: every fixture agreed with the bug, so the tests
 // passed while metric renames silently did nothing on real data. These tests
 // exist so the real file format is what the parser is held to.
+//
+// Attribute-rename scoping is deliberately not covered from these artefacts. Real
+// http metric groups declare their attributes with extends (see
+// TestUpstreamSemconvAttributes), which the loader does not resolve, so such a
+// metric has no attributes to rename and any assertion about scoping here would
+// hold no matter what the scoping code did. The hand-written fixtures in
+// storage_rename_validation_test.go and otel_schema_test.go cover it instead.
 const (
 	upstreamSchema        = "./testdata/upstream/schema-1.44.0.yaml"
 	upstreamSemconv1_21_0 = "./testdata/upstream/semconv-1.21.0.yaml"
@@ -91,33 +98,4 @@ func TestUpstreamSchemaMetricRenames(t *testing.T) {
 	// corroborated and nothing is reported.
 	require.Empty(t, warningStrings(set.Warnings()),
 		"a rename corroborated by the real semconv files must not warn")
-}
-
-// TestUpstreamSchemaAttributeRenameScope checks apply_to_metrics against the real
-// schema. Version 1.23.0 renames thread.daemon to jvm.thread.daemon for
-// jvm.thread.count only, so an unrelated metric must not have that attribute
-// rewritten.
-func TestUpstreamSchemaAttributeRenameScope(t *testing.T) {
-	underlying := teststorage.New(t)
-	wrapped, err := semconv.AwareStorageWithRegistry(underlying, upstreamRegistry(t))
-	require.NoError(t, err)
-
-	appendSeries(t, wrapped, "http.server.request.duration", 1, 7.0, "thread.daemon", "true")
-
-	q, err := wrapped.Querier(0, 10)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = q.Close() })
-
-	set := q.Select(context.Background(), false, nil,
-		labels.MustNewMatcher(labels.MatchEqual, model.MetricNameLabel, "http.server.request.duration"),
-		labels.MustNewMatcher(labels.MatchEqual, "__semconv_url__", "registry/1.22.0"),
-		labels.MustNewMatcher(labels.MatchEqual, "__schema_url__", "registry/registry.yaml"),
-	)
-	got := collectSeries(t, set)
-	require.Len(t, got, 1, "got %v", got)
-	for k := range got {
-		require.Contains(t, k, `"thread.daemon"="true"`,
-			"a rename scoped to jvm.thread.count must not rewrite this metric's attribute")
-		require.NotContains(t, k, "jvm.thread.daemon")
-	}
 }

@@ -392,3 +392,34 @@ versions:
 	// Not mentioned by any rename, so the schema says nothing about its era.
 	require.Empty(t, schema.eraVersionsOf("unrelated.name"))
 }
+
+// TestUpstreamSemconvAttributes pins how the real semconv files' metric attributes
+// parse, against the unmodified v1.44.0 artefact for semconv 1.22.0.
+//
+// It records a gap as much as a guarantee. Most real metric groups declare their
+// attributes with extends, naming an attribute_group to inherit from, and
+// semconvGroup has no such field: those groups parse with no attributes at all, so
+// nothing canonicalises their attribute names across a rename and no
+// apply_to_metrics scoping applies to them either. Only groups that list attributes
+// inline are seen. If extends is resolved later, the second assertion here is the
+// one that should change.
+func TestUpstreamSemconvAttributes(t *testing.T) {
+	b, err := os.ReadFile("./testdata/upstream/semconv-1.22.0.yaml")
+	require.NoError(t, err)
+	sc, err := loadSemconv(b, "1.22.0")
+	require.NoError(t, err)
+
+	// Declared inline, so they are parsed.
+	require.Contains(t, sc.attributesOf("http.server.active_requests"), "http.request.method",
+		"inline attributes of a real metric group must be parsed")
+
+	// Declared via "extends: metric_attributes.http.server", so they are not.
+	require.Empty(t, sc.attributesOf("http.server.request.duration"),
+		"extends is not resolved, so this group has no attributes; if that changes, so must this")
+
+	// Either way the group is indexed as a metric, which is what rename
+	// corroboration needs from it.
+	require.Contains(t, sc.metrics, "http.server.request.duration")
+	require.Equal(t, "s", sc.metrics["http.server.request.duration"].unit)
+	require.Equal(t, "histogram", sc.metrics["http.server.request.duration"].instrument)
+}
