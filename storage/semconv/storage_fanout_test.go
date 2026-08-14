@@ -171,3 +171,91 @@ func collectWithSamples(t *testing.T, set storage.SeriesSet) []seriesWithSamples
 	require.NoError(t, set.Err())
 	return out
 }
+
+// ctxCheckingStorage returns series sets that fail if the context they were
+// selected with has been cancelled by the time they are read, which is what an
+// underlying querier streaming from a remote does implicitly.
+type ctxCheckingStorage struct {
+	storage.Storage
+}
+
+func (s ctxCheckingStorage) Querier(mint, maxt int64) (storage.Querier, error) {
+	q, err := s.Storage.Querier(mint, maxt)
+	if err != nil {
+		return nil, err
+	}
+	return ctxCheckingQuerier{Querier: q}, nil
+}
+
+type ctxCheckingQuerier struct {
+	storage.Querier
+}
+
+func (q ctxCheckingQuerier) Select(ctx context.Context, sortSeries bool, hints *storage.SelectHints, matchers ...*labels.Matcher) storage.SeriesSet {
+	return &ctxCheckingSeriesSet{
+		SeriesSet: q.Querier.Select(ctx, sortSeries, hints, matchers...),
+		ctx:       ctx,
+	}
+}
+
+type ctxCheckingSeriesSet struct {
+	storage.SeriesSet
+
+	ctx context.Context
+	err error
+}
+
+func (s *ctxCheckingSeriesSet) Next() bool {
+	if err := s.ctx.Err(); err != nil {
+		s.err = err
+		return false
+	}
+	return s.SeriesSet.Next()
+}
+
+func (s *ctxCheckingSeriesSet) Err() error {
+	if s.err != nil {
+		return s.err
+	}
+	return s.SeriesSet.Err()
+}
+
+// TestFanOutKeepsSelectContextAlive checks that the context handed to the underlying
+// Select outlives the fan-out's errgroup.
+//
+// A Select is lazy, so its context has to stay valid until the result is read.
+// errgroup.WithContext cancels its context the moment Wait returns, which is before
+// anything reads a variant, and against a streaming querier that aborts the read
+// mid-stream. The in-memory test storage never notices, since tsdb only checks the
+// context every 100 iterations, so this asserts it through a querier that checks on
+// every one.
+func TestFanOutKeepsSelectContextAlive(t *testing.T) {
+	wrapped, err := semconv.AwareStorageWithRegistry(
+		ctxCheckingStorage{Storage: teststorage.New(t)},
+		map[string][]byte{
+			"registry.yaml": []byte(benchMetricRenameSchema),
+			"1.0.0":         []byte(fmt.Sprintf(benchSemconv, "bench.old", "attr.old")),
+			"1.1.0":         []byte(fmt.Sprintf(benchSemconv, "bench.new", "attr.new")),
+		})
+	require.NoError(t, err)
+
+	appendSeries(t, wrapped, "bench.old", 1, 1.0, "attr.old", "a")
+	appendSeries(t, wrapped, "bench.new", 1, 2.0, "attr.new", "b")
+
+	q, err := wrapped.Querier(0, 10)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = q.Close() })
+
+	set := q.Select(context.Background(), false, nil,
+		labels.MustNewMatcher(labels.MatchEqual, model.MetricNameLabel, "bench.new"),
+		labels.MustNewMatcher(labels.MatchEqual, "__semconv_url__", "registry/1.1.0"),
+		labels.MustNewMatcher(labels.MatchEqual, "__schema_url__", "registry/registry.yaml"),
+	)
+
+	var got int
+	for set.Next() {
+		got++
+	}
+	require.NoError(t, set.Err(), "the variants were read with a cancelled context")
+	require.Equal(t, 2, got, "both eras must be returned")
+}
