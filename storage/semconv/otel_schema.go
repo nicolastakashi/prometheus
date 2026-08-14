@@ -225,6 +225,14 @@ type versionRenames struct {
 	// name, and validating an edge against the semconv files requires knowing
 	// which version each name belongs to.
 	metricsForward map[string]string
+
+	// metricsBackward holds the reverse direction as one-to-many, new name → every
+	// old name renamed onto it, sorted. A version may collapse several old names
+	// onto one, which the schema format allows and real schemas do (semconv 1.38.0
+	// merges two spellings of k8s.replicationcontroller.pod.available). Walking such
+	// an edge backward has more than one answer, so metrics can only hold one of
+	// them and the walk consults this to branch; see applyVersionRenames.
+	metricsBackward map[string][]string
 }
 
 // renameDirection reports the older and newer name of the metric rename edge
@@ -272,9 +280,22 @@ func collectVersionRenames(versionStr string, version otelSchemaVersion) *versio
 			}
 			for oldName, newName := range change.RenameMetrics {
 				renames.metrics[oldName] = newName
-				renames.metrics[newName] = oldName
 				renames.metricsForward[oldName] = newName
+				if renames.metricsBackward == nil {
+					renames.metricsBackward = map[string][]string{}
+				}
+				renames.metricsBackward[newName] = append(renames.metricsBackward[newName], oldName)
 			}
+		}
+		// Sorted, and the reverse entries in metrics written from the sorted result,
+		// so a version collapsing several old names onto one resolves the same way
+		// in every process. Reading them straight out of the YAML map left which old
+		// name metrics reported dependent on Go's map iteration order, so a query
+		// could return a different set of historical names after a restart.
+		for newName, oldNames := range renames.metricsBackward {
+			slices.Sort(oldNames)
+			renames.metricsBackward[newName] = slices.Compact(oldNames)
+			renames.metrics[newName] = renames.metricsBackward[newName][0]
 		}
 
 		// Collect attribute renames from the "metrics" section, restricted to the

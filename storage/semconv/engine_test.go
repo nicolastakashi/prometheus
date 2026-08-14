@@ -14,6 +14,7 @@
 package semconv
 
 import (
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -438,5 +439,90 @@ func TestBuildAttributeRenameMap(t *testing.T) {
 			},
 		}
 		require.Nil(t, buildAttributeRenameMap("1.1.0", schema, nil))
+	})
+}
+
+// TestGenerateMatcherVariants_ManyToOneRename covers a version that renames several
+// old metric names onto one. Undoing that edge has an answer per old name, and each
+// is a name the metric was known by, so all of them have to be queried. Holding the
+// reverse direction in a one-to-one map could only keep one, chosen by Go's map
+// iteration order, so the set of historical names a query covered could differ
+// between processes.
+func TestGenerateMatcherVariants_ManyToOneRename(t *testing.T) {
+	t.Run("follows every old name renamed onto the queried one", func(t *testing.T) {
+		schema, err := loadOTelSchema([]byte(`file_format: 1.1.0
+schema_url: https://example.com/schemas/1.1.0
+versions:
+  1.0.0:
+  1.1.0:
+    metrics:
+      changes:
+        - rename_metrics:
+            metric.b: metric.merged
+            metric.a: metric.merged
+`))
+		require.NoError(t, err)
+
+		matchers := []*labels.Matcher{
+			labels.MustNewMatcher(labels.MatchEqual, labels.MetricName, "metric.merged"),
+		}
+		result := generateMatcherVariants("1.1.0", &schema, matchers, nil)
+
+		require.ElementsMatch(t,
+			[]string{"metric.merged", "metric.a", "metric.b"},
+			extractMetricNames(result))
+	})
+
+	t.Run("follows each old name's own earlier renames", func(t *testing.T) {
+		// metric.b is reached only by branching at the collapsed edge, and it has a
+		// rename of its own before that, so the branch has to be walked on and not
+		// merely recorded.
+		schema, err := loadOTelSchema([]byte(`file_format: 1.1.0
+schema_url: https://example.com/schemas/1.1.0
+versions:
+  1.0.0:
+  1.1.0:
+    metrics:
+      changes:
+        - rename_metrics:
+            metric.b.older: metric.b
+  1.2.0:
+    metrics:
+      changes:
+        - rename_metrics:
+            metric.a: metric.merged
+            metric.b: metric.merged
+`))
+		require.NoError(t, err)
+
+		matchers := []*labels.Matcher{
+			labels.MustNewMatcher(labels.MatchEqual, labels.MetricName, "metric.merged"),
+		}
+		result := generateMatcherVariants("1.2.0", &schema, matchers, nil)
+
+		require.ElementsMatch(t,
+			[]string{"metric.merged", "metric.a", "metric.b", "metric.b.older"},
+			extractMetricNames(result))
+	})
+
+	// The real thing: semconv 1.38.0 merges two spellings of the replication
+	// controller metrics onto one name. Both spellings must be queried, in an order
+	// that does not vary between processes.
+	t.Run("upstream schema collapses two spellings", func(t *testing.T) {
+		b, err := os.ReadFile("./testdata/upstream/schema-1.44.0.yaml")
+		require.NoError(t, err)
+		schema, err := loadOTelSchema(b)
+		require.NoError(t, err)
+
+		matchers := []*labels.Matcher{
+			labels.MustNewMatcher(labels.MatchEqual, labels.MetricName, "k8s.replicationcontroller.pod.available"),
+		}
+		result := generateMatcherVariants("1.44.0", &schema, matchers, nil)
+
+		require.Equal(t, []string{
+			"k8s.replicationcontroller.pod.available",
+			"k8s.replicationcontroller.available_pods",
+			"k8s.replication_controller.available_pods",
+		}, extractMetricNames(result))
 	})
 }

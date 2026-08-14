@@ -372,47 +372,68 @@ func walkVersions(
 	reverse bool,
 	rv *renameValidator,
 ) (variants [][]*labels.Matcher, applied [][]*labels.Matcher) {
-	current := matchers
-	for {
-		found := false
-		var versionsIter iter.Seq2[int, versionRenames]
-		if reverse {
-			versionsIter = slices.Backward(versions)
-		} else {
-			versionsIter = slices.All(versions)
-		}
-
-		for _, v := range versionsIter {
-			currentName, err := extractMetricName(current)
-			if err == nil && !rv.allowEdge(v, currentName) {
-				// The semconv files contradict this rename, so the walk must
-				// not chain through it either: anything reachable only via a
-				// mis-linked edge belongs to a different metric.
-				continue
-			}
-			transformed := applyVersionRenames(current, v)
-			if transformed == nil {
-				continue
+	// A queue rather than a single chain, because undoing a rename that collapsed
+	// several old names onto one yields several names at that hop and each has its
+	// own history to follow. Ordinary one-to-one edges never queue anything, so the
+	// walk is the same single chain it was for them.
+	queue := [][]*labels.Matcher{matchers}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		for {
+			found := false
+			var versionsIter iter.Seq2[int, versionRenames]
+			if reverse {
+				versionsIter = slices.Backward(versions)
+			} else {
+				versionsIter = slices.All(versions)
 			}
 
-			key := matcherKey(transformed)
-			if _, exists := seen[key]; exists {
-				continue
-			}
-
-			seen[key] = struct{}{}
-			result = append(result, transformed)
-			if transformedName, nameErr := extractMetricName(transformed); nameErr == nil && currentName != "" {
-				if newer, ok := v.metricsForward[currentName]; ok && newer == transformedName {
-					applied = append(applied, transformed)
+			for _, v := range versionsIter {
+				currentName, err := extractMetricName(current)
+				if err == nil && !rv.allowEdge(v, currentName) {
+					// The semconv files contradict this rename, so the walk must
+					// not chain through it either: anything reachable only via a
+					// mis-linked edge belongs to a different metric.
+					continue
 				}
+				transformed, alternatives := applyVersionRenames(current, v)
+				if transformed == nil {
+					continue
+				}
+
+				for _, alt := range alternatives {
+					altKey := matcherKey(alt)
+					if _, exists := seen[altKey]; exists {
+						continue
+					}
+					seen[altKey] = struct{}{}
+					result = append(result, alt)
+					// Followed from here on its own, since it is a name of this
+					// metric like any other. Not added to applied: it comes from
+					// undoing a rename, so it predates the anchor.
+					queue = append(queue, alt)
+				}
+
+				key := matcherKey(transformed)
+				if _, exists := seen[key]; exists {
+					continue
+				}
+
+				seen[key] = struct{}{}
+				result = append(result, transformed)
+				if transformedName, nameErr := extractMetricName(transformed); nameErr == nil && currentName != "" {
+					if newer, ok := v.metricsForward[currentName]; ok && newer == transformedName {
+						applied = append(applied, transformed)
+					}
+				}
+				current = transformed
+				found = true
+				break
 			}
-			current = transformed
-			found = true
-			break
-		}
-		if !found {
-			break
+			if !found {
+				break
+			}
 		}
 	}
 	return result, applied
@@ -498,13 +519,23 @@ func matcherKey(matchers []*labels.Matcher) string {
 
 // applyVersionRenames applies a version's metric and attribute renames to matchers.
 // Returns nil if no renames apply. Uses lazy allocation to avoid allocating when no changes are made.
-func applyVersionRenames(matchers []*labels.Matcher, renames versionRenames) []*labels.Matcher {
-	var result []*labels.Matcher
+//
+// alternatives holds the further results of undoing a rename that collapsed several
+// old metric names onto one: that edge has one answer per old name, and every one of
+// them is a name this metric was known by, so they are all variants to query. It is
+// empty for the ordinary one-to-one edge.
+func applyVersionRenames(matchers []*labels.Matcher, renames versionRenames) (result []*labels.Matcher, alternatives [][]*labels.Matcher) {
+	metricIdx := -1
 	for i, m := range matchers {
 		var newMatcher *labels.Matcher
 		if m.Name == model.MetricNameLabel {
 			if variant, ok := renames.metrics[m.Value]; ok {
 				newMatcher = labels.MustNewMatcher(m.Type, m.Name, variant)
+				if _, forward := renames.metricsForward[m.Value]; !forward {
+					// Undoing a rename, so m.Value is the newer name and other old
+					// names may have been renamed onto it too.
+					metricIdx = i
+				}
 			}
 		} else if variant, ok := renames.attributes[m.Name]; ok {
 			newMatcher = labels.MustNewMatcher(m.Type, variant, m.Value)
@@ -520,8 +551,18 @@ func applyVersionRenames(matchers []*labels.Matcher, renames versionRenames) []*
 			result[i] = m
 		}
 	}
+	if result == nil || metricIdx < 0 {
+		return result, nil
+	}
 
-	return result
+	// The first old name is already in result (metrics holds it); the rest branch.
+	olds := renames.metricsBackward[matchers[metricIdx].Value]
+	for _, old := range olds[min(1, len(olds)):] {
+		alt := slices.Clone(result)
+		alt[metricIdx] = labels.MustNewMatcher(matchers[metricIdx].Type, model.MetricNameLabel, old)
+		alternatives = append(alternatives, alt)
+	}
+	return result, alternatives
 }
 
 type queryContext struct {
