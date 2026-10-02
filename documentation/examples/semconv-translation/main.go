@@ -13,9 +13,11 @@
 
 // This demo showcases versioned OTel semantic-conventions read in Prometheus.
 // It simulates a native-OTel producer whose metric and one of its attributes
-// are renamed across semantic-conventions versions: semconv 1.0.0 named the
-// metric "test.counter" with attribute "user"; semconv 1.1.0 renamed them to
-// "test" and "tenant".
+// are renamed across semantic-conventions versions. By default semconv 1.0.0
+// names the metric "test.counter" with attribute "user" and semconv 1.1.0
+// renames them to "test" and "tenant"; the --old-metric, --new-metric,
+// --old-attr, --new-attr, --old-version, --new-version and --schema flags
+// point the demo at a different registry and rename.
 //
 // The demo shows:
 //   - How a rename breaks queries (each name covers only its own era)
@@ -35,6 +37,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/prometheus/common/promslog"
@@ -59,7 +62,29 @@ const (
 var (
 	dataDir      = flag.String("data-dir", "", "TSDB data directory (default: temp directory, deleted on exit)")
 	populateOnly = flag.Bool("populate-only", false, "Only populate data, skip query phase (for use with demo.sh)")
+
+	oldMetric = flag.String("old-metric", "test.counter", "Metric name in the earlier semconv version")
+	newMetric = flag.String("new-metric", "test", "Metric name in the later semconv version")
+	oldAttr   = flag.String("old-attr", "user", "Attribute name in the earlier semconv version")
+	newAttr   = flag.String("new-attr", "tenant", "Attribute name in the later semconv version")
+	oldVer    = flag.String("old-version", "1.0.0", "Earlier semconv version")
+	newVer    = flag.String("new-version", "1.1.0", "Later semconv version")
+	schema    = flag.String("schema", "registry/registry.yaml", "Embedded schema file to resolve renames against")
 )
+
+// sel renders a metric name as a PromQL selector. Native OTel names contain
+// dots, so they need the quoted syntax; classic Prometheus names do not.
+func sel(metric string) string {
+	if strings.ContainsAny(metric, ".-/") {
+		return fmt.Sprintf("{%q}", metric)
+	}
+	return metric
+}
+
+// schemaQuery builds the schema-aware selector for the later version.
+func schemaQuery() string {
+	return fmt.Sprintf("%s{__semconv_url__=\"registry/%s\", __schema_url__=%q}", sel(*newMetric), *newVer, *schema)
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -142,22 +167,22 @@ func run() error {
 	value := 100.0
 
 	// ===== Phase 1: semconv 1.0.0 era — test.counter (2h-1h ago) =====
-	printPhase(1, "Semconv 1.0.0 era: native metric test.counter")
-	fmt.Print("The producer used semconv 1.0.0: metric 'test.counter' with attribute 'user'\n")
-	fmt.Print("(native OTel names). Writing samples from 2 hours ago to 1 hour ago...\n\n")
-	if err := writeEra(db, "test.counter", "user", now.Add(-2*time.Hour), now.Add(-1*time.Hour), interval, &value); err != nil {
+	printPhase(1, fmt.Sprintf("Semconv %s era: metric %s", *oldVer, *oldMetric))
+	fmt.Printf("The producer used semconv %s: metric %q with attribute %q\n", *oldVer, *oldMetric, *oldAttr)
+	fmt.Print("Writing samples from 2 hours ago to 1 hour ago...\n\n")
+	if err := writeEra(db, *oldMetric, *oldAttr, now.Add(-2*time.Hour), now.Add(-1*time.Hour), interval, &value); err != nil {
 		return err
 	}
-	fmt.Printf("  %s[Written]%s %d samples each for test.counter{user=\"acme\", http.response.status_code=\"200\"/\"404\"}\n\n", colorGreen, colorReset, int(time.Hour/interval))
+	fmt.Printf("  %s[Written]%s %d samples each for %s{%s=\"acme\", http.response.status_code=\"200\"/\"404\"}\n\n", colorGreen, colorReset, int(time.Hour/interval), *oldMetric, *oldAttr)
 
 	// ===== Phase 2: semconv 1.1.0 era — renamed to test (1h ago-now) =====
-	printPhase(2, "Semconv 1.1.0 era: renamed to test")
-	fmt.Print("Semconv 1.1.0 renamed 'test.counter' → 'test' and 'user' → 'tenant'. The same\n")
-	fmt.Print("producer now writes 'test' with 'tenant'. Writing samples from 1 hour ago to now...\n\n")
-	if err := writeEra(db, "test", "tenant", now.Add(-1*time.Hour), now, interval, &value); err != nil {
+	printPhase(2, fmt.Sprintf("Semconv %s era: renamed to %s", *newVer, *newMetric))
+	fmt.Printf("Semconv %s renamed %q → %q and %q → %q. The same\n", *newVer, *oldMetric, *newMetric, *oldAttr, *newAttr)
+	fmt.Printf("producer now writes %q with %q. Writing samples from 1 hour ago to now...\n\n", *newMetric, *newAttr)
+	if err := writeEra(db, *newMetric, *newAttr, now.Add(-1*time.Hour), now, interval, &value); err != nil {
 		return err
 	}
-	fmt.Printf("  %s[Written]%s %d samples each for test{tenant=\"acme\", http.response.status_code=\"200\"/\"404\"}\n\n", colorGreen, colorReset, int(time.Hour/interval))
+	fmt.Printf("  %s[Written]%s %d samples each for %s{%s=\"acme\", http.response.status_code=\"200\"/\"404\"}\n\n", colorGreen, colorReset, int(time.Hour/interval), *newMetric, *newAttr)
 
 	// If populate-only mode, exit here.
 	if *populateOnly {
@@ -167,12 +192,14 @@ func run() error {
 		fmt.Printf("  %s./prometheus --storage.tsdb.path=%s --config.file=/dev/null --enable-feature=semconv-versioned-read%s\n\n", colorCyan, tsdbDir, colorReset)
 		fmt.Print("Then open http://localhost:9090 and try these queries:\n\n")
 		fmt.Printf("  %sThe Problem - the rename splits the series across two names:%s\n", colorYellow, colorReset)
-		fmt.Printf("    %s{\"test.counter\"}%s   # Only the semconv 1.0.0 era (2h-1h ago)\n", colorMagenta, colorReset)
-		fmt.Printf("    %stest%s           # Only the semconv 1.1.0 era (1h-now)\n\n", colorMagenta, colorReset)
+		fmt.Printf("    %s%s%s   # Only the semconv %s era (2h-1h ago)\n", colorMagenta, sel(*oldMetric), colorReset, *oldVer)
+		fmt.Printf("    %s%s%s   # Only the semconv %s era (1h-now)\n\n", colorMagenta, sel(*newMetric), colorReset, *newVer)
 		fmt.Printf("  %sThe Solution - __schema_url__ walks the version renames:%s\n", colorGreen, colorReset)
-		fmt.Printf("    %stest{__semconv_url__=\"registry/1.1.0\", __schema_url__=\"registry/registry.yaml\"}%s   # Both eras under \"test\"\n\n", colorMagenta, colorReset)
-		fmt.Printf("  %sAttribute rename - __schema_url__ also normalises user → tenant:%s\n", colorGreen, colorReset)
-		fmt.Printf("    %ssum by (tenant) (test{__semconv_url__=\"registry/1.1.0\", __schema_url__=\"registry/registry.yaml\"})%s   # 1.0.0 'user' folds into 'tenant'\n\n", colorMagenta, colorReset)
+		fmt.Printf("    %s%s%s   # Both eras under %q\n\n", colorMagenta, schemaQuery(), colorReset, *newMetric)
+		if *oldAttr != *newAttr {
+			fmt.Printf("  %sAttribute rename - __schema_url__ also normalises %s → %s:%s\n", colorGreen, *oldAttr, *newAttr, colorReset)
+			fmt.Printf("    %ssum by (%s) (%s)%s   # %s %q folds into %q\n\n", colorMagenta, *newAttr, schemaQuery(), colorReset, *oldVer, *oldAttr, *newAttr)
+		}
 		return nil
 	}
 
@@ -189,10 +216,10 @@ func run() error {
 	ctx := context.Background()
 
 	fmt.Print("After the rename, neither name alone covers the whole timeline:\n\n")
-	runRangeQueryWithDetails(ctx, engine, db, now, `{"test.counter"}`,
-		"Old (1.0.0) name - only data from BEFORE the rename")
-	runRangeQueryWithDetails(ctx, engine, db, now, "test",
-		"New (1.1.0) name - only data from AFTER the rename")
+	runRangeQueryWithDetails(ctx, engine, db, now, sel(*oldMetric),
+		fmt.Sprintf("Old (%s) name - only data from BEFORE the rename", *oldVer))
+	runRangeQueryWithDetails(ctx, engine, db, now, sel(*newMetric),
+		fmt.Sprintf("New (%s) name - only data from AFTER the rename", *newVer))
 	fmt.Printf("  %s=> Neither query alone shows the complete picture!%s\n\n", colorYellow, colorReset)
 
 	// ===== Phase 4: The schema-version solution - __schema_url__ =====
@@ -203,31 +230,38 @@ func run() error {
 	fmt.Print("metric's historical names and merging results under the requested version's name.\n\n")
 
 	runRangeQueryWithDetails(ctx, engine, semconvStorage, now,
-		`test{__semconv_url__="registry/1.1.0", __schema_url__="registry/registry.yaml"}`,
-		"Schema-aware query - spans the rename, unified under \"test\"")
+		schemaQuery(),
+		fmt.Sprintf("Schema-aware query - spans the rename, unified under %q", *newMetric))
 	fmt.Printf("  %s=> Complete coverage across the rename boundary at %s%s\n\n", colorGreen, now.Add(-1*time.Hour).Format("15:04"), colorReset)
 
-	// ===== Phase 5: attribute-rename continuity via sum by (tenant) =====
-	printPhase(5, "Attribute rename: user → tenant")
+	// ===== Phase 5: attribute-rename continuity. Only meaningful when an
+	// attribute actually changed name between the two versions. =====
+	if *oldAttr != *newAttr {
+		printPhase(5, fmt.Sprintf("Attribute rename: %s → %s", *oldAttr, *newAttr))
 
-	fmt.Print("Semconv 1.1.0 also renamed the attribute 'user' → 'tenant'. __schema_url__\n")
-	fmt.Print("normalises historical attribute names too, so aggregating by the new name folds\n")
-	fmt.Print("the 1.0.0 era (labelled 'user') in rather than dropping it.\n\n")
+		fmt.Printf("Semconv %s also renamed the attribute %q → %q. __schema_url__\n", *newVer, *oldAttr, *newAttr)
+		fmt.Print("normalises historical attribute names too, so aggregating by the new name folds\n")
+		fmt.Printf("the %s era (labelled %q) in rather than dropping it.\n\n", *oldVer, *oldAttr)
 
-	runRangeQueryWithDetails(ctx, engine, semconvStorage, now,
-		`sum by (tenant) (test{__semconv_url__="registry/1.1.0", __schema_url__="registry/registry.yaml"})`,
-		"sum by (tenant) - groups both eras under the canonical attribute name")
-	fmt.Printf("  %s=> The 1.0.0 'user' series is grouped under 'tenant', spanning the rename%s\n\n", colorGreen, colorReset)
+		runRangeQueryWithDetails(ctx, engine, semconvStorage, now,
+			fmt.Sprintf("sum by (%s) (%s)", *newAttr, schemaQuery()),
+			fmt.Sprintf("sum by (%s) - groups both eras under the canonical attribute name", *newAttr))
+		fmt.Printf("  %s=> The %s %q series is grouped under %q, spanning the rename%s\n\n", colorGreen, *oldVer, *oldAttr, *newAttr, colorReset)
+	}
 
 	// ===== Summary =====
 	fmt.Printf("\n%s%s--- Summary ---%s\n\n", colorBold, colorGreen, colorReset)
-	fmt.Print("This demo simulated a native-OTel producer (myapp:8080) whose metric was renamed\n")
+	fmt.Print("This demo simulated a producer (myapp:8080) whose metric was renamed\n")
 	fmt.Print("across semantic-conventions versions:\n\n")
-	fmt.Printf("  %s*%s semconv 1.0.0 (2h-1h ago): test.counter{user=\"acme\", http.response.status_code=\"200\", ...}\n", colorCyan, colorReset)
-	fmt.Printf("  %s*%s semconv 1.1.0 (1h ago-now): test{tenant=\"acme\", http.response.status_code=\"200\", ...}\n\n", colorCyan, colorReset)
+	fmt.Printf("  %s*%s semconv %s (2h-1h ago): %s{%s=\"acme\", http.response.status_code=\"200\", ...}\n", colorCyan, colorReset, *oldVer, *oldMetric, *oldAttr)
+	fmt.Printf("  %s*%s semconv %s (1h ago-now): %s{%s=\"acme\", http.response.status_code=\"200\", ...}\n\n", colorCyan, colorReset, *newVer, *newMetric, *newAttr)
 	fmt.Printf("  %s*%s Without __schema_url__: queries break at the rename, dashboards show gaps\n", colorYellow, colorReset)
 	fmt.Printf("  %s*%s With __semconv_url__ + __schema_url__: one query spans the rename, unifying\n", colorGreen, colorReset)
-	fmt.Print("    both the metric name (test) and the attribute name (tenant)\n\n")
+	if *oldAttr != *newAttr {
+		fmt.Printf("    both the metric name (%s) and the attribute name (%s)\n\n", *newMetric, *newAttr)
+	} else {
+		fmt.Printf("    the metric name (%s)\n\n", *newMetric)
+	}
 
 	return nil
 }

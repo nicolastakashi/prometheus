@@ -130,7 +130,13 @@ func TestValidateRegistryFiles(t *testing.T) {
 
 	t.Run("rejects a registry with no schema", func(t *testing.T) {
 		files := embeddedRegistryFiles(t)
-		delete(files, "registry.yaml")
+		// Drop every schema file, whichever registries the binary embeds: a
+		// schema is any file whose name is not a semconv version.
+		for name := range files {
+			if !semverRe.MatchString(name) {
+				delete(files, name)
+			}
+		}
 		require.Error(t, validateRegistryFiles(files))
 	})
 
