@@ -1,0 +1,20 @@
+groups:
+  - id: registry.remote_write
+    type: attribute_group
+    brief: "Remote write attributes"
+    attributes:
+      - id: url
+        type: string
+        stability: stable
+        brief: "The remote write endpoint"
+        examples: ["http://remote.example.com/api/v1/write"]
+  - id: metric.prometheus.remote_storage.samples_failed
+    type: metric
+    brief: "Samples which failed on send to remote storage"
+    stability: stable
+    metric_name: prometheus_remote_storage_samples_failed_total
+    instrument: counter
+    unit: "{sample}"
+    attributes:
+      - ref: url
+        requirement_level: recommended

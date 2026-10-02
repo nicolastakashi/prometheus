@@ -1,0 +1,12 @@
+file_format: 1.1.0
+schema_url: https://prometheus.io/schemas/2.23.0
+
+versions:
+  2.22.0:
+
+  2.23.0:
+    metrics:
+      changes:
+        # prometheus/prometheus#6815
+        - rename_metrics:
+            prometheus_remote_storage_failed_samples_total: prometheus_remote_storage_samples_failed_total
