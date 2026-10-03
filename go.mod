@@ -2,6 +2,9 @@ module github.com/prometheus/prometheus
 
 go 1.26.7
 
+// Demo-only dependency providing descriptor introspection APIs.
+replace github.com/prometheus/client_golang => github.com/nicolastakashi/client_golang v0.0.0-20260912090613-28583381ab9a
+
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.1
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.1

@@ -7,6 +7,11 @@ specification says they mean. Everything else here is Prometheus specific.
 
 [semconv]: https://opentelemetry.io/docs/specs/semconv/
 
+This demo pins a custom `client_golang` fork in the root `go.mod` to provide
+`DescInfo`, `Desc.Info()`, and `Registry.DescribeAll()`. These descriptor
+introspection APIs are required by the registry contract tests and are not
+available in the released dependency.
+
 A metric with a label and a histogram configuration looks like this:
 
 ```yaml
