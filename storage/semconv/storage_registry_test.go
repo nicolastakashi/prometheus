@@ -218,4 +218,48 @@ groups:
 		}
 		require.True(t, found, "expected the renamed metric under its 1.1.0 name in: %v", got)
 	})
+
+	// The Prometheus registry carries a real rename, prometheus/prometheus#6815,
+	// so it has to resolve in both directions: a sample written under the 2.22.0
+	// name must surface when 2.23.0 is requested, and one written under the
+	// 2.23.0 name must surface when 2.22.0 is requested.
+	t.Run("the Prometheus registry resolves its rename in both directions", func(t *testing.T) {
+		const (
+			oldName = "prometheus_remote_storage_failed_samples_total"
+			newName = "prometheus_remote_storage_samples_failed_total"
+			schema  = "registry/prometheus.yaml"
+		)
+		for _, tc := range []struct {
+			name      string
+			written   string
+			version   string
+			requested string
+		}{
+			{name: "forwards", written: oldName, version: "registry/2.23.0", requested: newName},
+			{name: "backwards", written: newName, version: "registry/2.22.0", requested: oldName},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				wrapped, err := semconv.AwareStorageWithRegistry(teststorage.New(t), readRegistryDir(t, "registry"))
+				require.NoError(t, err)
+				appendSeries(t, wrapped, tc.written, 1, 7.0, "url", "http://remote.example.com/api/v1/write")
+
+				q, err := wrapped.Querier(0, 10)
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = q.Close() })
+
+				got := collectSeries(t, q.Select(context.Background(), false, nil,
+					labels.MustNewMatcher(labels.MatchEqual, model.MetricNameLabel, tc.requested),
+					labels.MustNewMatcher(labels.MatchEqual, "__semconv_url__", tc.version),
+					labels.MustNewMatcher(labels.MatchEqual, "__schema_url__", schema),
+				))
+				var found bool
+				for k := range got {
+					if strings.Contains(k, `__name__="`+tc.requested+`"`) {
+						found = true
+					}
+				}
+				require.True(t, found, "expected %q written as %q to surface under %q in: %v", tc.written, tc.written, tc.requested, got)
+			})
+		}
+	})
 }

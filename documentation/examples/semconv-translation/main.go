@@ -37,6 +37,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -72,18 +74,49 @@ var (
 	schema    = flag.String("schema", "registry/registry.yaml", "Embedded schema file to resolve renames against")
 )
 
-// sel renders a metric name as a PromQL selector. Native OTel names contain
-// dots, so they need the quoted syntax; classic Prometheus names do not.
-func sel(metric string) string {
-	if strings.ContainsAny(metric, ".-/") {
-		return fmt.Sprintf("{%q}", metric)
+// legacyNameRE matches the classic Prometheus name grammar. PromQL accepts
+// those bare; every other name - a native OTel one with dots, say - has to be
+// quoted, so the flags must not be interpolated into a query unchecked.
+var legacyNameRE = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_:]*$`)
+
+// lbl renders a label name for a matcher or a grouping clause.
+func lbl(name string) string {
+	if legacyNameRE.MatchString(name) {
+		return name
 	}
-	return metric
+	return strconv.Quote(name)
+}
+
+// sel renders a bare metric name as a PromQL selector.
+func sel(metric string) string {
+	if legacyNameRE.MatchString(metric) {
+		return metric
+	}
+	return fmt.Sprintf("{%s}", strconv.Quote(metric))
+}
+
+// selWith renders a metric name with matchers. A quoted metric name has to move
+// inside the braces, so it cannot simply be prefixed onto them.
+func selWith(metric string, matchers ...string) string {
+	inner := strings.Join(matchers, ", ")
+	if legacyNameRE.MatchString(metric) {
+		return fmt.Sprintf("%s{%s}", metric, inner)
+	}
+	return fmt.Sprintf("{%s, %s}", strconv.Quote(metric), inner)
 }
 
 // schemaQuery builds the schema-aware selector for the later version.
 func schemaQuery() string {
-	return fmt.Sprintf("%s{__semconv_url__=\"registry/%s\", __schema_url__=%q}", sel(*newMetric), *newVer, *schema)
+	return selWith(*newMetric,
+		fmt.Sprintf("__semconv_url__=\"registry/%s\"", *newVer),
+		fmt.Sprintf("__schema_url__=%q", *schema))
+}
+
+// eraSeries renders the series one era writes, as a selector the reader can paste.
+func eraSeries(metric, tenantAttr, code string) string {
+	return selWith(metric,
+		fmt.Sprintf("%s=\"acme\"", lbl(tenantAttr)),
+		fmt.Sprintf("%s=%s", lbl("http.response.status_code"), code))
 }
 
 func main() {
@@ -173,7 +206,7 @@ func run() error {
 	if err := writeEra(db, *oldMetric, *oldAttr, now.Add(-2*time.Hour), now.Add(-1*time.Hour), interval, &value); err != nil {
 		return err
 	}
-	fmt.Printf("  %s[Written]%s %d samples each for %s{%s=\"acme\", http.response.status_code=\"200\"/\"404\"}\n\n", colorGreen, colorReset, int(time.Hour/interval), *oldMetric, *oldAttr)
+	fmt.Printf("  %s[Written]%s %d samples each for %s\n\n", colorGreen, colorReset, int(time.Hour/interval), eraSeries(*oldMetric, *oldAttr, "\"200\"/\"404\""))
 
 	// ===== Phase 2: semconv 1.1.0 era — renamed to test (1h ago-now) =====
 	printPhase(2, fmt.Sprintf("Semconv %s era: renamed to %s", *newVer, *newMetric))
@@ -182,7 +215,7 @@ func run() error {
 	if err := writeEra(db, *newMetric, *newAttr, now.Add(-1*time.Hour), now, interval, &value); err != nil {
 		return err
 	}
-	fmt.Printf("  %s[Written]%s %d samples each for %s{%s=\"acme\", http.response.status_code=\"200\"/\"404\"}\n\n", colorGreen, colorReset, int(time.Hour/interval), *newMetric, *newAttr)
+	fmt.Printf("  %s[Written]%s %d samples each for %s\n\n", colorGreen, colorReset, int(time.Hour/interval), eraSeries(*newMetric, *newAttr, "\"200\"/\"404\""))
 
 	// If populate-only mode, exit here.
 	if *populateOnly {
@@ -198,7 +231,7 @@ func run() error {
 		fmt.Printf("    %s%s%s   # Both eras under %q\n\n", colorMagenta, schemaQuery(), colorReset, *newMetric)
 		if *oldAttr != *newAttr {
 			fmt.Printf("  %sAttribute rename - __schema_url__ also normalises %s → %s:%s\n", colorGreen, *oldAttr, *newAttr, colorReset)
-			fmt.Printf("    %ssum by (%s) (%s)%s   # %s %q folds into %q\n\n", colorMagenta, *newAttr, schemaQuery(), colorReset, *oldVer, *oldAttr, *newAttr)
+			fmt.Printf("    %ssum by (%s) (%s)%s   # %s %q folds into %q\n\n", colorMagenta, lbl(*newAttr), schemaQuery(), colorReset, *oldVer, *oldAttr, *newAttr)
 		}
 		return nil
 	}
@@ -244,7 +277,7 @@ func run() error {
 		fmt.Printf("the %s era (labelled %q) in rather than dropping it.\n\n", *oldVer, *oldAttr)
 
 		runRangeQueryWithDetails(ctx, engine, semconvStorage, now,
-			fmt.Sprintf("sum by (%s) (%s)", *newAttr, schemaQuery()),
+			fmt.Sprintf("sum by (%s) (%s)", lbl(*newAttr), schemaQuery()),
 			fmt.Sprintf("sum by (%s) - groups both eras under the canonical attribute name", *newAttr))
 		fmt.Printf("  %s=> The %s %q series is grouped under %q, spanning the rename%s\n\n", colorGreen, *oldVer, *oldAttr, *newAttr, colorReset)
 	}
@@ -253,8 +286,8 @@ func run() error {
 	fmt.Printf("\n%s%s--- Summary ---%s\n\n", colorBold, colorGreen, colorReset)
 	fmt.Print("This demo simulated a producer (myapp:8080) whose metric was renamed\n")
 	fmt.Print("across semantic-conventions versions:\n\n")
-	fmt.Printf("  %s*%s semconv %s (2h-1h ago): %s{%s=\"acme\", http.response.status_code=\"200\", ...}\n", colorCyan, colorReset, *oldVer, *oldMetric, *oldAttr)
-	fmt.Printf("  %s*%s semconv %s (1h ago-now): %s{%s=\"acme\", http.response.status_code=\"200\", ...}\n\n", colorCyan, colorReset, *newVer, *newMetric, *newAttr)
+	fmt.Printf("  %s*%s semconv %s (2h-1h ago): %s\n", colorCyan, colorReset, *oldVer, eraSeries(*oldMetric, *oldAttr, "\"200\", ..."))
+	fmt.Printf("  %s*%s semconv %s (1h ago-now): %s\n\n", colorCyan, colorReset, *newVer, eraSeries(*newMetric, *newAttr, "\"200\", ..."))
 	fmt.Printf("  %s*%s Without __schema_url__: queries break at the rename, dashboards show gaps\n", colorYellow, colorReset)
 	fmt.Printf("  %s*%s With __semconv_url__ + __schema_url__: one query spans the rename, unifying\n", colorGreen, colorReset)
 	if *oldAttr != *newAttr {
