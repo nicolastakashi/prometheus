@@ -78,10 +78,11 @@ var (
 // those bare; every other name - a native OTel one with dots, say - has to be
 // quoted, so the flags must not be interpolated into a query unchecked.
 var legacyNameRE = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_:]*$`)
+var legacyLabelNameRE = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
 // lbl renders a label name for a matcher or a grouping clause.
 func lbl(name string) string {
-	if legacyNameRE.MatchString(name) {
+	if legacyLabelNameRE.MatchString(name) {
 		return name
 	}
 	return strconv.Quote(name)
